@@ -1,0 +1,43 @@
+[package]
+name = "slaunch"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "slaunch"
+path = "src/main.rs"
+
+[dependencies]
+# Wayland layer shell UI
+iced = { version = "0.13", features = ["tokio", "image", "svg"] }
+iced_layershell = { version = "0.9",  }
+
+# Fuzzy search (SIMD-accelerated, parallel)
+nucleo = "0.5"
+
+# Config + serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Async runtime (IPC socket server/client)
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# XDG directories ($XDG_RUNTIME_DIR, $XDG_DATA_DIRS, etc.)
+xdg = "2.5"
+
+# File watching for config hot-reload
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# anyhow for error handling
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

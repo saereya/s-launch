@@ -1,0 +1,106 @@
+use std::sync::Arc;
+use tokio::net::UnixListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{mpsc, RwLock};
+
+use crate::config::{self, Config};
+use crate::ipc::{self, Command, RESP_ERR, RESP_OK};
+use crate::plugins::{Entry, Plugin};
+use crate::plugins::apps::AppsPlugin;
+use crate::plugins::commands::CommandsPlugin;
+
+/// Messages the IPC listener sends into the Iced application.
+#[derive(Debug, Clone)]
+pub enum DaemonEvent {
+    Show,
+    Hide,
+    ReloadConfig(Box<Config>),
+    Quit,
+}
+
+/// State shared between the socket listener and the UI.
+pub struct DaemonState {
+    pub config: RwLock<Config>,
+    pub entries: RwLock<Vec<Entry>>,
+}
+
+impl DaemonState {
+    pub fn new(cfg: Config) -> Self {
+        Self {
+            config: RwLock::new(cfg),
+            entries: RwLock::new(Vec::new()),
+        }
+    }
+}
+
+/// Scan all enabled plugins and return the combined entry list.
+pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
+    let mut out = Vec::new();
+    if cfg.plugins.apps {
+        AppsPlugin.scan(&mut out);
+    }
+    if cfg.plugins.commands {
+        CommandsPlugin.scan(&mut out);
+    }
+    tracing::info!("Scanned {} entries", out.len());
+    out
+}
+
+/// Run the IPC socket server loop.
+/// `tx` sends DaemonEvents into the Iced app subscription channel.
+pub async fn run_socket(
+    state: Arc<DaemonState>,
+    tx: mpsc::Sender<DaemonEvent>,
+) -> anyhow::Result<()> {
+    let socket_path = ipc::socket_path();
+
+    // Remove stale socket file if present
+    if socket_path.exists() {
+        std::fs::remove_file(&socket_path)?;
+    }
+
+    let listener = UnixListener::bind(&socket_path)?;
+    tracing::info!("IPC socket listening at {}", socket_path.display());
+
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        let state = state.clone();
+        let tx = tx.clone();
+
+        tokio::spawn(async move {
+            let mut cmd_byte = [0u8; 1];
+            if stream.read_exact(&mut cmd_byte).await.is_err() {
+                return;
+            }
+
+            let response = match Command::from_byte(cmd_byte[0]) {
+                Some(Command::Show) => {
+                    let _ = tx.send(DaemonEvent::Show).await;
+                    RESP_OK
+                }
+                Some(Command::Hide) => {
+                    let _ = tx.send(DaemonEvent::Hide).await;
+                    RESP_OK
+                }
+                Some(Command::Reload) => {
+                    let new_cfg = config::load();
+                    let new_entries = scan_entries(&new_cfg);
+                    *state.config.write().await = new_cfg.clone();
+                    *state.entries.write().await = new_entries;
+                    let _ = tx.send(DaemonEvent::ReloadConfig(Box::new(new_cfg))).await;
+                    RESP_OK
+                }
+                Some(Command::Kill) => {
+                    let _ = tx.send(DaemonEvent::Quit).await;
+                    RESP_OK
+                }
+                None => {
+                    tracing::warn!("Unknown IPC command byte: 0x{:02x}", cmd_byte[0]);
+                    RESP_ERR
+                }
+            };
+
+            let _ = stream.write_all(&[response]).await;
+        });
+    }
+}

@@ -1,0 +1,51 @@
+# slaunch configuration
+# Copy to ~/.config/slaunch/config.toml and edit as needed.
+
+[window]
+# Launcher width in pixels
+width = 640
+# Maximum result rows shown at once
+max_results = 12
+# Which output to appear on: "focused" | "primary" | exact output name
+monitor = "focused"
+# Where to anchor the window: "top" | "bottom" | "center"
+anchor = "top"
+# Pixels from the anchored edge (ignored for "center")
+margin = 60
+
+[input]
+placeholder = "Search..."
+
+[plugins]
+# XDG .desktop application launcher
+apps = true
+# Executables found on $PATH
+commands = true
+
+# ── Styling ─────────────────────────────────────────────────────────────────
+# All color values are CSS-style hex: "#rrggbb" or "#rrggbbaa"
+
+[style]
+background    = "#1e1e2e"
+foreground    = "#cdd6f4"
+font_family   = "monospace"
+font_size     = 14.0
+border_radius = 10.0
+border_width  = 1.0
+border_color  = "#313244"
+padding       = 10
+item_height   = 40
+
+# Override just the search input box colors
+[style.input]
+background = "#181825"
+foreground = "#cdd6f4"
+
+# Override result item colors
+[style.item]
+# background and foreground default to [style] values if omitted
+
+# Highlighted / selected row
+[style.item.selected]
+background = "#313244"
+foreground = "#cdd6f4"
