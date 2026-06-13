@@ -39,6 +39,8 @@ pub struct InputConfig {
 pub struct PluginsConfig {
     pub apps: bool,
     pub commands: bool,
+    /// Order determines result priority: first entry appears before later ones.
+    pub priority: Vec<String>,
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -80,6 +82,7 @@ impl Default for PluginsConfig {
         Self {
             apps: true,
             commands: true,
+            priority: vec!["apps".into(), "commands".into()],
         }
     }
 }

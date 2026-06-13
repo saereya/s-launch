@@ -49,20 +49,40 @@ impl Searcher {
         self.nucleo.tick(20);
     }
 
-    /// Return matched entries in ranked order (best first), limited to `limit`.
+    /// Return matched entries limited to `limit`, with higher-priority plugins
+    /// filling slots before lower-priority ones regardless of fuzzy score.
+    ///
+    /// Nucleo ranks all entries by score together, so a highly-scored command
+    /// would otherwise push a lower-scored app out of the visible window. Instead
+    /// we scan all matches, bucket by plugin priority, and fill the result list
+    /// from the highest-priority bucket first.
     pub fn results(&mut self, limit: usize) -> Vec<MatchedEntry> {
-        // Ensure any in-flight work is done before snapshotting
         self.nucleo.tick(5);
         let snapshot = self.nucleo.snapshot();
-        snapshot
-            .matched_items(..snapshot.matched_item_count().min(limit as u32))
-            .map(|item| {
-                let idx = *item.data;
-                MatchedEntry {
-                    entry: self.entries[idx].clone(),
-                }
-            })
-            .collect()
+        let total = snapshot.matched_item_count();
+
+        // Collect up to `limit` best matches per priority bucket (score order).
+        let mut buckets: std::collections::BTreeMap<u8, Vec<MatchedEntry>> =
+            std::collections::BTreeMap::new();
+        for item in snapshot.matched_items(..total) {
+            let idx = *item.data;
+            let entry = &self.entries[idx];
+            let bucket = buckets.entry(entry.priority).or_default();
+            if bucket.len() < limit {
+                bucket.push(MatchedEntry { entry: entry.clone() });
+            }
+        }
+
+        // Fill result list from highest-priority (lowest number) bucket first.
+        let mut results = Vec::with_capacity(limit);
+        for bucket in buckets.values() {
+            let remaining = limit.saturating_sub(results.len());
+            if remaining == 0 {
+                break;
+            }
+            results.extend_from_slice(&bucket[..bucket.len().min(remaining)]);
+        }
+        results
     }
 
     #[allow(dead_code)]

@@ -34,14 +34,24 @@ impl DaemonState {
 }
 
 /// Scan all enabled plugins and return the combined entry list.
+/// Plugins are scanned in the order defined by `plugins.priority`; entries from
+/// earlier plugins sort before later ones in search results.
 pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
     let mut out = Vec::new();
-    if cfg.plugins.apps {
-        AppsPlugin.scan(&mut out);
+
+    for (priority, name) in cfg.plugins.priority.iter().enumerate() {
+        let start = out.len();
+        match name.as_str() {
+            "apps" if cfg.plugins.apps => AppsPlugin.scan(&mut out),
+            "commands" if cfg.plugins.commands => CommandsPlugin.scan(&mut out),
+            _ => continue,
+        }
+        let p = priority as u8;
+        for entry in &mut out[start..] {
+            entry.priority = p;
+        }
     }
-    if cfg.plugins.commands {
-        CommandsPlugin.scan(&mut out);
-    }
+
     tracing::info!("Scanned {} entries", out.len());
     out
 }

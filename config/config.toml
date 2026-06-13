@@ -26,3 +26,6 @@ placeholder = "Search..."
 apps = true
 # Executables found on $PATH
 commands = true
+# Result priority order — plugins listed first appear before later ones in results.
+# Remove or reorder entries to change which plugin's results show first.
+priority = ["apps", "commands"]

@@ -33,6 +33,7 @@ impl Plugin for CommandsPlugin {
                         description: Some(dir_path.display().to_string()),
                         icon: None,
                         kind: EntryKind::Command { path: path.clone() },
+                        priority: 0,
                     });
                 }
             }

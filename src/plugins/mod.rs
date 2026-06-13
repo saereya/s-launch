@@ -12,6 +12,8 @@ pub struct Entry {
     pub icon: Option<String>,
     /// How to launch: the plugin's launch() receives the entry back
     pub kind: EntryKind,
+    /// Lower value = higher priority in results; set by scan_entries from config
+    pub priority: u8,
 }
 
 #[derive(Debug, Clone)]

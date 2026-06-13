@@ -103,6 +103,7 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
         description,
         icon,
         kind: EntryKind::App { exec, terminal },
+        priority: 0,
     })
 }
 
