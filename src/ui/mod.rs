@@ -1,5 +1,3 @@
-pub mod theme;
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -19,6 +17,17 @@ use crate::plugins::{
     apps::AppsPlugin, commands::CommandsPlugin, Entry as AppEntry, EntryKind, Plugin,
 };
 use crate::search::Searcher;
+
+fn load_user_css() -> String {
+    let path = crate::config::style_path();
+    match std::fs::read_to_string(&path) {
+        Ok(css) => css,
+        Err(_) => {
+            tracing::warn!("No stylesheet at {}; window will use system theme", path.display());
+            String::new()
+        }
+    }
+}
 
 // ── UI state ──────────────────────────────────────────────────────────────────
 
@@ -154,7 +163,7 @@ fn build_ui(
 
     // CSS at highest priority — fully overrides the system theme for our window.
     let provider = CssProvider::new();
-    provider.load_from_string(&theme::build_css(&config.style));
+    provider.load_from_string(&load_user_css());
     gtk4::style_context_add_provider_for_display(
         &gtk4::gdk::Display::default().expect("no display"),
         &provider,
@@ -200,13 +209,17 @@ fn build_ui(
     let list = ListBox::new();
     list.set_selection_mode(gtk4::SelectionMode::Single);
 
+    let max_list_height =
+        (config.window.max_results * config.window.item_height as usize) as i32;
     let scroll = ScrolledWindow::builder()
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
         .hscrollbar_policy(gtk4::PolicyType::Never)
+        .propagate_natural_height(true)
+        .max_content_height(max_list_height)
         .build();
     scroll.set_child(Some(&list));
 
-    let p = config.style.padding as i32;
+    let p = config.window.padding as i32;
     let content = GtkBox::new(Orientation::Vertical, p);
     content.set_margin_start(p);
     content.set_margin_end(p);
@@ -352,7 +365,7 @@ fn build_ui(
                             .try_read()
                             .map(|g| g.clone())
                             .unwrap_or_default();
-                        let new_css = theme::build_css(&new_cfg.style);
+                        let new_css = load_user_css();
                         {
                             let mut s = state.borrow_mut();
                             s.searcher.reload(new_entries);

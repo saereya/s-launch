@@ -1,5 +1,6 @@
 # slaunch configuration
 # Copy to ~/.config/slaunch/config.toml and edit as needed.
+# Place your stylesheet at ~/.config/slaunch/style.css
 
 [window]
 # Launcher width in pixels
@@ -12,6 +13,10 @@ monitor = "focused"
 anchor = "top"
 # Pixels from the anchored edge (ignored for "center")
 margin = 60
+# Height of each result row in pixels (used to compute the scroll area)
+item_height = 40
+# Padding around the launcher content in pixels
+padding = 10
 
 [input]
 placeholder = "Search..."
@@ -21,31 +26,3 @@ placeholder = "Search..."
 apps = true
 # Executables found on $PATH
 commands = true
-
-# ── Styling ─────────────────────────────────────────────────────────────────
-# All color values are CSS-style hex: "#rrggbb" or "#rrggbbaa"
-
-[style]
-background    = "#1e1e2e"
-foreground    = "#cdd6f4"
-font_family   = "monospace"
-font_size     = 14.0
-border_radius = 10.0
-border_width  = 1.0
-border_color  = "#313244"
-padding       = 10
-item_height   = 40
-
-# Override just the search input box colors
-[style.input]
-background = "#181825"
-foreground = "#cdd6f4"
-
-# Override result item colors
-[style.item]
-# background and foreground default to [style] values if omitted
-
-# Highlighted / selected row
-[style.item.selected]
-background = "#313244"
-foreground = "#cdd6f4"

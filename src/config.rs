@@ -7,7 +7,6 @@ pub struct Config {
     pub window: WindowConfig,
     pub input: InputConfig,
     pub plugins: PluginsConfig,
-    pub style: StyleConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -23,6 +22,10 @@ pub struct WindowConfig {
     pub anchor: String,
     /// Pixels from the anchored edge
     pub margin: u32,
+    /// Height of each result row in pixels
+    pub item_height: u16,
+    /// Padding around the launcher content in pixels
+    pub padding: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -38,46 +41,6 @@ pub struct PluginsConfig {
     pub commands: bool,
 }
 
-/// Top-level style block — all sub-blocks are optional overrides.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct StyleConfig {
-    pub background: String,
-    pub foreground: String,
-    pub font_family: String,
-    pub font_size: f32,
-    pub border_radius: f32,
-    pub border_width: f32,
-    pub border_color: String,
-    pub padding: u16,
-    pub item_height: u16,
-    pub input: InputStyleConfig,
-    pub item: ItemStyleConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct InputStyleConfig {
-    pub background: Option<String>,
-    pub foreground: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct ItemStyleConfig {
-    pub background: Option<String>,
-    pub foreground: Option<String>,
-    /// [style.item.selected] overrides
-    pub selected: SelectedStyleConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct SelectedStyleConfig {
-    pub background: Option<String>,
-    pub foreground: Option<String>,
-}
-
 // ── Defaults ────────────────────────────────────────────────────────────────
 
 impl Default for Config {
@@ -86,7 +49,6 @@ impl Default for Config {
             window: Default::default(),
             input: Default::default(),
             plugins: Default::default(),
-            style: Default::default(),
         }
     }
 }
@@ -97,8 +59,10 @@ impl Default for WindowConfig {
             width: 640,
             max_results: 12,
             monitor: "focused".into(),
-            anchor: "top".into(),
+            anchor: "center".into(),
             margin: 60,
+            item_height: 40,
+            padding: 10,
         }
     }
 }
@@ -120,58 +84,18 @@ impl Default for PluginsConfig {
     }
 }
 
-impl Default for StyleConfig {
-    fn default() -> Self {
-        Self {
-            background: "#1e1e2e".into(),
-            foreground: "#cdd6f4".into(),
-            font_family: "monospace".into(),
-            font_size: 14.0,
-            border_radius: 10.0,
-            border_width: 1.0,
-            border_color: "#313244".into(),
-            padding: 10,
-            item_height: 40,
-            input: Default::default(),
-            item: Default::default(),
-        }
-    }
-}
-
-impl Default for InputStyleConfig {
-    fn default() -> Self {
-        Self {
-            background: None,
-            foreground: None,
-        }
-    }
-}
-
-impl Default for ItemStyleConfig {
-    fn default() -> Self {
-        Self {
-            background: None,
-            foreground: None,
-            selected: Default::default(),
-        }
-    }
-}
-
-impl Default for SelectedStyleConfig {
-    fn default() -> Self {
-        Self {
-            background: Some("#313244".into()),
-            foreground: None,
-        }
-    }
-}
-
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
     let base = xdg::BaseDirectories::with_prefix("slaunch")
         .expect("xdg basedirs");
     base.get_config_file("config.toml")
+}
+
+pub fn style_path() -> PathBuf {
+    let base = xdg::BaseDirectories::with_prefix("slaunch")
+        .expect("xdg basedirs");
+    base.get_config_file("style.css")
 }
 
 pub fn load() -> Config {
@@ -194,15 +118,3 @@ pub fn load() -> Config {
         }
     }
 }
-
-/// Parse a hex color string like "#rrggbb" or "#rrggbbaa" into [u8; 4] RGBA.
-pub fn parse_color(hex: &str) -> [u8; 4] {
-    let s = hex.trim_start_matches('#');
-    let parse2 = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).unwrap_or(0);
-    match s.len() {
-        6 => [parse2(0), parse2(2), parse2(4), 255],
-        8 => [parse2(0), parse2(2), parse2(4), parse2(6)],
-        _ => [0, 0, 0, 255],
-    }
-}
-
