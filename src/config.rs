@@ -206,7 +206,3 @@ pub fn parse_color(hex: &str) -> [u8; 4] {
     }
 }
 
-pub fn parse_color_iced(hex: &str) -> iced::Color {
-    let [r, g, b, a] = parse_color(hex);
-    iced::Color::from_rgba8(r, g, b, a as f32 / 255.0)
-}

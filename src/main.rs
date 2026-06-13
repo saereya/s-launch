@@ -85,8 +85,7 @@ fn run_daemon() {
         });
     });
 
-    // Run the Iced application on the main thread (required by most Wayland
-    // compositors and by iced_layershell).
+    // GTK must run on the main thread (required by most Wayland compositors).
     if let Err(e) = ui::run(state, rx) {
         tracing::error!("UI error: {e}");
         std::process::exit(1);

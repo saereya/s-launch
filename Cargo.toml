@@ -9,8 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Wayland layer shell UI
-iced = { version = "0.13", features = ["tokio", "image", "svg"] }
-iced_layershell = { version = "0.9",  }
+gtk4 = { version = "0.9", features = ["v4_12"] }
+gtk4-layer-shell = "0.4"
+async-channel = "2"
 
 # Fuzzy search (SIMD-accelerated, parallel)
 nucleo = "0.5"
@@ -28,12 +29,11 @@ clap = { version = "4", features = ["derive"] }
 # XDG directories ($XDG_RUNTIME_DIR, $XDG_DATA_DIRS, etc.)
 xdg = "2.5"
 
-# File watching for config hot-reload
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# anyhow for error handling
+# Error handling
 anyhow = "1"
 
 [profile.release]
