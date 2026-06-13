@@ -179,8 +179,6 @@ fn build_ui(
     match config.window.anchor.as_str() {
         "bottom" => {
             window.set_anchor(Edge::Bottom, true);
-            window.set_anchor(Edge::Left, true);
-            window.set_anchor(Edge::Right, true);
             window.set_anchor(Edge::Top, false);
             window.set_margin(Edge::Bottom, config.window.margin as i32);
         }
@@ -188,8 +186,6 @@ fn build_ui(
         _ => {
             // "top" (default)
             window.set_anchor(Edge::Top, true);
-            window.set_anchor(Edge::Left, true);
-            window.set_anchor(Edge::Right, true);
             window.set_anchor(Edge::Bottom, false);
             window.set_margin(Edge::Top, config.window.margin as i32);
         }
