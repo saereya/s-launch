@@ -87,7 +87,7 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
         return None;
     }
 
-    let icon = resolve_icon(&icon_name);
+    let icon = if icon_name.is_empty() { None } else { Some(icon_name) };
     let description = if generic_name.is_empty() {
         // Fall back to the .desktop file's parent dir as a hint
         path.parent()
@@ -104,57 +104,6 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
         icon,
         kind: EntryKind::App { exec, terminal },
     })
-}
-
-/// Resolve an icon name or absolute path to a filesystem path.
-fn resolve_icon(name: &str) -> Option<PathBuf> {
-    if name.is_empty() {
-        return None;
-    }
-    // Absolute path given directly in the .desktop file
-    let p = PathBuf::from(name);
-    if p.is_absolute() && p.exists() {
-        return Some(p);
-    }
-    // Search common icon locations (sizes ordered by preference)
-    let sizes = ["scalable", "48x48", "64x64", "32x32", "256x256", "128x128"];
-    let categories = ["apps", "applications"];
-    let exts = ["svg", "png"];
-
-    let data_dirs: Vec<PathBuf> = {
-        let mut dirs = vec![PathBuf::from("/usr/share"), PathBuf::from("/usr/local/share")];
-        if let Ok(home) = std::env::var("HOME") {
-            dirs.insert(0, PathBuf::from(home).join(".local/share"));
-        }
-        dirs
-    };
-
-    // Try $icon_dir/icons/<theme>/<size>/<category>/<name>.<ext>
-    let themes = ["hicolor", "Adwaita", "breeze", "Papirus"];
-    for data_dir in &data_dirs {
-        let icon_base = data_dir.join("icons");
-        for theme in &themes {
-            for size in &sizes {
-                for cat in &categories {
-                    for ext in &exts {
-                        let path = icon_base.join(theme).join(size).join(cat)
-                            .join(format!("{name}.{ext}"));
-                        if path.exists() {
-                            return Some(path);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Fall back to /usr/share/pixmaps
-    for ext in &exts {
-        let p = PathBuf::from(format!("/usr/share/pixmaps/{name}.{ext}"));
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
 }
 
 /// Strip %u, %U, %f, %F, %i, %c, %k field codes from Exec values.

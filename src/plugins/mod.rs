@@ -8,9 +8,8 @@ pub struct Entry {
     pub name: String,
     /// Secondary description shown below the name (e.g. path, category)
     pub description: Option<String>,
-    /// Filesystem path to a PNG/SVG icon, resolved at scan time (used by icon rendering)
-    #[allow(dead_code)]
-    pub icon: Option<std::path::PathBuf>,
+    /// Icon name (XDG theme name like "firefox") or absolute path to PNG/SVG
+    pub icon: Option<String>,
     /// How to launch: the plugin's launch() receives the entry back
     pub kind: EntryKind,
 }

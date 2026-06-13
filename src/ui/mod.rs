@@ -5,8 +5,8 @@ use std::sync::Arc;
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, CssProvider, Entry, EventControllerKey, Label,
-    ListBox, ListBoxRow, Orientation, PropagationPhase, ScrolledWindow,
+    Align, Application, ApplicationWindow, Box as GtkBox, CssProvider, Entry, EventControllerKey,
+    Image, Label, ListBox, ListBoxRow, Orientation, Picture, PropagationPhase, ScrolledWindow,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokio::sync::mpsc;
@@ -71,7 +71,29 @@ fn rebuild_list(list: &ListBox, state: &UiState) {
     }
 
     for entry in &state.results {
+        let hbox = GtkBox::new(Orientation::Horizontal, 8);
+
+        if let Some(icon_str) = &entry.icon {
+            if std::path::Path::new(icon_str).is_absolute() {
+                // Picture scales to fill its allocation; can_shrink prevents it from
+                // expanding the row when the source image is larger than 32px.
+                let pic = Picture::for_filename(icon_str.as_str());
+                pic.set_can_shrink(true);
+                pic.set_size_request(32, 32);
+                pic.set_halign(Align::Center);
+                pic.set_valign(Align::Center);
+                hbox.append(&pic);
+            } else {
+                let img = Image::from_icon_name(icon_str);
+                img.set_pixel_size(32);
+                img.set_valign(Align::Center);
+                hbox.append(&img);
+            }
+        }
+
         let vbox = GtkBox::new(Orientation::Vertical, 2);
+        vbox.set_hexpand(true);
+        vbox.set_valign(Align::Center);
 
         let name = Label::builder()
             .label(entry.name.as_str())
@@ -90,8 +112,10 @@ fn rebuild_list(list: &ListBox, state: &UiState) {
             vbox.append(&desc_lbl);
         }
 
+        hbox.append(&vbox);
+
         let row = ListBoxRow::new();
-        row.set_child(Some(&vbox));
+        row.set_child(Some(&hbox));
         list.append(&row);
     }
 
