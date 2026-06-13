@@ -62,6 +62,25 @@ impl UiState {
     }
 }
 
+// ── Scroll helper ─────────────────────────────────────────────────────────────
+
+fn scroll_to_row(scroll: &ScrolledWindow, row: &ListBoxRow) {
+    let Some(list) = row.parent() else { return };
+    let Some(bounds) = row.compute_bounds(&list) else { return };
+
+    let adj = scroll.vadjustment();
+    let row_y = bounds.y() as f64;
+    let row_h = bounds.height() as f64;
+    let current = adj.value();
+    let page = adj.page_size();
+
+    if row_y < current {
+        adj.set_value(row_y);
+    } else if row_y + row_h > current + page {
+        adj.set_value(row_y + row_h - page);
+    }
+}
+
 // ── List helpers ──────────────────────────────────────────────────────────────
 
 fn rebuild_list(list: &ListBox, state: &UiState) {
@@ -292,6 +311,7 @@ fn build_ui(
     // always work even with focus on the text field.
     {
         let list = list.clone();
+        let scroll = scroll.clone();
         let state = state.clone();
         let window_ref = window.clone();
         let entry_ref = search_entry.clone();
@@ -324,8 +344,11 @@ fn build_ui(
                         s.selected = (s.selected + 1).min(s.results.len() - 1);
                     }
                 }
-                let s = state.borrow();
-                list.select_row(list.row_at_index(s.selected as i32).as_ref());
+                let idx = state.borrow().selected as i32;
+                list.select_row(list.row_at_index(idx).as_ref());
+                if let Some(row) = list.row_at_index(idx) {
+                    scroll_to_row(&scroll, &row);
+                }
                 return glib::Propagation::Stop;
             }
 
@@ -336,8 +359,11 @@ fn build_ui(
                         s.selected -= 1;
                     }
                 }
-                let s = state.borrow();
-                list.select_row(list.row_at_index(s.selected as i32).as_ref());
+                let idx = state.borrow().selected as i32;
+                list.select_row(list.row_at_index(idx).as_ref());
+                if let Some(row) = list.row_at_index(idx) {
+                    scroll_to_row(&scroll, &row);
+                }
                 return glib::Propagation::Stop;
             }
 
