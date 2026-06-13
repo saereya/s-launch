@@ -14,7 +14,8 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 use crate::daemon::{DaemonEvent, DaemonState};
 use crate::plugins::{
-    apps::AppsPlugin, commands::CommandsPlugin, Entry as AppEntry, EntryKind, Plugin,
+    apps::AppsPlugin, commands::CommandsPlugin, math::MathPlugin, Entry as AppEntry, EntryKind,
+    Plugin,
 };
 use crate::search::Searcher;
 
@@ -42,13 +43,19 @@ struct UiState {
 
 impl UiState {
     fn refresh_results(&mut self) {
-        self.searcher.update_pattern(&self.query);
-        self.results = self
-            .searcher
-            .results(self.config.window.max_results)
-            .into_iter()
-            .map(|m| m.entry)
-            .collect();
+        if self.query.starts_with('=') {
+            let mut math_out = Vec::new();
+            MathPlugin.query(&self.query, &mut math_out);
+            self.results = math_out;
+        } else {
+            self.searcher.update_pattern(&self.query);
+            self.results = self
+                .searcher
+                .results(self.config.window.max_results)
+                .into_iter()
+                .map(|m| m.entry)
+                .collect();
+        }
         self.selected = 0;
     }
 
@@ -57,6 +64,7 @@ impl UiState {
             match &entry.kind {
                 EntryKind::App { .. } => AppsPlugin.launch(entry),
                 EntryKind::Command { .. } => CommandsPlugin.launch(entry),
+                EntryKind::MathResult { .. } => MathPlugin.launch(entry),
             }
         }
     }

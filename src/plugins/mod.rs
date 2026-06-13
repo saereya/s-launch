@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod commands;
+pub mod math;
 
 /// A single searchable result that a plugin provides.
 #[derive(Debug, Clone)]
@@ -22,6 +23,8 @@ pub enum EntryKind {
     App { exec: String, terminal: bool },
     /// Raw shell command found on $PATH
     Command { path: std::path::PathBuf },
+    /// Evaluated math expression; value is copied to clipboard on launch
+    MathResult { value: String },
 }
 
 /// Static plugin interface — all plugins are compiled in and registered at startup.
@@ -32,4 +35,6 @@ pub trait Plugin: Send + Sync {
     fn scan(&self, out: &mut Vec<Entry>);
     /// Called when the user activates an entry produced by this plugin.
     fn launch(&self, entry: &Entry);
+    /// Produce dynamic entries from the current query string (called on every keystroke).
+    fn query(&self, _input: &str, _out: &mut Vec<Entry>) {}
 }
