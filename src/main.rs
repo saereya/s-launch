@@ -34,22 +34,27 @@ enum Commands {
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("slaunch=info".parse().unwrap()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("slaunch=info")),
         )
         .init();
 
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Daemon => run_daemon(),
+        Commands::Daemon => {
+            if let Err(e) = run_daemon() {
+                eprintln!("slaunch: {e}");
+                std::process::exit(1);
+            }
+        }
         cmd => run_client(cmd),
     }
 }
 
 // ── Daemon entry point ────────────────────────────────────────────────────────
 
-fn run_daemon() {
+fn run_daemon() -> anyhow::Result<()> {
     let cfg = config::load();
     tracing::info!("Starting slaunch daemon");
 
@@ -57,39 +62,37 @@ fn run_daemon() {
     // first Show is instant.
     let entries = daemon::scan_entries(&cfg);
     let state = Arc::new(daemon::DaemonState::new(cfg));
-    // Populate entry cache synchronously before the event loop starts.
     {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
-            .expect("tokio runtime");
+            .map_err(|e| anyhow::anyhow!("Failed to build tokio runtime: {e}"))?;
         let state_ref = state.clone();
         rt.block_on(async move {
             *state_ref.entries.write().await = entries;
         });
     }
 
-    // Channel from the IPC socket task into the Iced subscription
+    // Channel from the IPC socket task into the GTK event loop
     let (tx, rx) = mpsc::channel::<daemon::DaemonEvent>(32);
 
     // Spawn the tokio IPC socket listener on a background thread
     let state_clone = state.clone();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("tokio runtime");
-        rt.block_on(async move {
-            if let Err(e) = daemon::run_socket(state_clone, tx).await {
-                tracing::error!("IPC socket error: {e}");
-            }
-        });
+        {
+            Ok(rt) => rt.block_on(async move {
+                if let Err(e) = daemon::run_socket(state_clone, tx).await {
+                    tracing::error!("IPC socket error: {e}");
+                }
+            }),
+            Err(e) => tracing::error!("Failed to start IPC runtime: {e}"),
+        }
     });
 
     // GTK must run on the main thread (required by most Wayland compositors).
-    if let Err(e) = ui::run(state, rx) {
-        tracing::error!("UI error: {e}");
-        std::process::exit(1);
-    }
+    ui::run(state, rx)
 }
 
 // ── Client entry point ────────────────────────────────────────────────────────
@@ -103,10 +106,16 @@ fn run_client(cmd: Commands) {
         Commands::Daemon => unreachable!(),
     };
 
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("slaunch: failed to create runtime: {e}");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(e) = rt.block_on(client::run(ipc_cmd)) {
         eprintln!("slaunch: {e}");

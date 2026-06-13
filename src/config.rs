@@ -41,6 +41,8 @@ pub struct PluginsConfig {
     pub commands: bool,
     /// Order determines result priority: first entry appears before later ones.
     pub priority: Vec<String>,
+    /// Terminal emulator to use for Terminal=true apps. None = auto-detect.
+    pub terminal: Option<String>,
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -83,6 +85,7 @@ impl Default for PluginsConfig {
             apps: true,
             commands: true,
             priority: vec!["apps".into(), "commands".into()],
+            terminal: None,
         }
     }
 }
@@ -90,15 +93,20 @@ impl Default for PluginsConfig {
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 pub fn config_path() -> PathBuf {
-    let base = xdg::BaseDirectories::with_prefix("slaunch")
-        .expect("xdg basedirs");
-    base.get_config_file("config.toml")
+    xdg::BaseDirectories::with_prefix("slaunch")
+        .map(|b| b.get_config_file("config.toml"))
+        .unwrap_or_else(|_| fallback_config_dir().join("config.toml"))
 }
 
 pub fn style_path() -> PathBuf {
-    let base = xdg::BaseDirectories::with_prefix("slaunch")
-        .expect("xdg basedirs");
-    base.get_config_file("style.css")
+    xdg::BaseDirectories::with_prefix("slaunch")
+        .map(|b| b.get_config_file("style.css"))
+        .unwrap_or_else(|_| fallback_config_dir().join("style.css"))
+}
+
+fn fallback_config_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join(".config/slaunch")
 }
 
 pub fn load() -> Config {
@@ -116,6 +124,7 @@ pub fn load() -> Config {
     match toml::from_str(&raw) {
         Ok(c) => c,
         Err(e) => {
+            eprintln!("slaunch: config parse error in {}: {e}", path.display());
             tracing::error!("Config parse error: {e}");
             Config::default()
         }

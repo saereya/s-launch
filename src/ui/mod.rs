@@ -62,7 +62,9 @@ impl UiState {
     fn launch_at(&self, index: usize) {
         if let Some(entry) = self.results.get(index) {
             match &entry.kind {
-                EntryKind::App { .. } => AppsPlugin.launch(entry),
+                EntryKind::App { .. } => {
+                    AppsPlugin::new(self.config.plugins.terminal.clone()).launch(entry)
+                }
                 EntryKind::Command { .. } => CommandsPlugin.launch(entry),
                 EntryKind::MathResult { .. } => MathPlugin.launch(entry),
             }
@@ -165,18 +167,24 @@ pub fn run(
     // replacement that works with glib's spawn_local.
     let (sender, receiver) = async_channel::bounded::<DaemonEvent>(32);
     std::thread::spawn(move || {
-        tokio::runtime::Builder::new_current_thread()
+        let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap()
-            .block_on(async move {
-                let mut rx = ipc_rx;
-                while let Some(ev) = rx.recv().await {
-                    if sender.send(ev).await.is_err() {
-                        break;
-                    }
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!("IPC bridge runtime failed: {e}");
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let mut rx = ipc_rx;
+            while let Some(ev) = rx.recv().await {
+                if sender.send(ev).await.is_err() {
+                    break;
                 }
-            });
+            }
+        });
     });
 
     let app = Application::builder()
@@ -215,8 +223,12 @@ fn build_ui(
     // CSS at highest priority — fully overrides the system theme for our window.
     let provider = CssProvider::new();
     provider.load_from_string(&load_user_css());
+    let Some(display) = gtk4::gdk::Display::default() else {
+        tracing::error!("No GTK display available");
+        return;
+    };
     gtk4::style_context_add_provider_for_display(
-        &gtk4::gdk::Display::default().expect("no display"),
+        &display,
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_USER,
     );

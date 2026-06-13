@@ -3,7 +3,17 @@ use std::path::{Path, PathBuf};
 
 use super::{Entry, EntryKind, Plugin};
 
-pub struct AppsPlugin;
+const FALLBACK_TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "xterm"];
+
+pub struct AppsPlugin {
+    pub terminal: Option<String>,
+}
+
+impl AppsPlugin {
+    pub fn new(terminal: Option<String>) -> Self {
+        Self { terminal }
+    }
+}
 
 impl Plugin for AppsPlugin {
     fn name(&self) -> &str {
@@ -12,7 +22,6 @@ impl Plugin for AppsPlugin {
 
     fn scan(&self, out: &mut Vec<Entry>) {
         let dirs = xdg_application_dirs();
-        // Track seen names so duplicates (user overrides system) are skipped.
         let mut seen: HashMap<String, ()> = HashMap::new();
 
         for dir in &dirs {
@@ -39,7 +48,7 @@ impl Plugin for AppsPlugin {
         if let EntryKind::App { exec, terminal } = &entry.kind {
             let cmd = strip_field_codes(exec);
             if *terminal {
-                launch_in_terminal(&cmd);
+                launch_in_terminal(&cmd, self.terminal.as_deref());
             } else {
                 launch_detached(&cmd);
             }
@@ -89,7 +98,6 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
 
     let icon = if icon_name.is_empty() { None } else { Some(icon_name) };
     let description = if generic_name.is_empty() {
-        // Fall back to the .desktop file's parent dir as a hint
         path.parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
@@ -113,7 +121,7 @@ fn strip_field_codes(exec: &str) -> String {
     let mut chars = exec.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '%' {
-            chars.next(); // consume the code letter
+            chars.next();
         } else {
             out.push(c);
         }
@@ -121,27 +129,52 @@ fn strip_field_codes(exec: &str) -> String {
     out.trim().to_string()
 }
 
-fn launch_detached(cmd: &str) {
-    use std::process::Command;
-    if let Err(e) = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+fn parse_exec(exec: &str) -> Option<Vec<String>> {
+    match shell_words::split(exec) {
+        Ok(args) if !args.is_empty() => Some(args),
+        Ok(_) => {
+            tracing::error!("Empty exec string");
+            None
+        }
+        Err(e) => {
+            tracing::error!("Could not parse exec '{exec}': {e}");
+            None
+        }
+    }
+}
+
+fn launch_detached(exec: &str) {
+    let Some(args) = parse_exec(exec) else { return };
+    if let Err(e) = std::process::Command::new(&args[0])
+        .args(&args[1..])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
     {
-        tracing::error!("Failed to launch '{cmd}': {e}");
+        tracing::error!("Failed to launch '{exec}': {e}");
     }
 }
 
-fn launch_in_terminal(cmd: &str) {
-    // Try common terminal emulators in priority order
-    let terminals = ["foot", "alacritty", "kitty", "wezterm", "xterm"];
-    for term in &terminals {
+fn launch_in_terminal(exec: &str, terminal: Option<&str>) {
+    let Some(args) = parse_exec(exec) else { return };
+    if let Some(term) = terminal {
+        if let Err(e) = std::process::Command::new(term)
+            .arg("-e")
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            tracing::error!("Failed to launch terminal '{term}': {e}");
+        }
+        return;
+    }
+    for term in FALLBACK_TERMINALS {
         if std::process::Command::new(term)
             .arg("-e")
-            .arg(cmd)
+            .args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -151,7 +184,7 @@ fn launch_in_terminal(cmd: &str) {
             return;
         }
     }
-    tracing::error!("No terminal emulator found to launch '{cmd}'");
+    tracing::error!("No terminal emulator found; set [plugins] terminal in config");
 }
 
 fn xdg_application_dirs() -> Vec<PathBuf> {
@@ -161,7 +194,6 @@ fn xdg_application_dirs() -> Vec<PathBuf> {
         .map(|d| PathBuf::from(d).join("applications"))
         .collect();
 
-    // Prepend user's local apps so they override system ones
     if let Ok(home) = std::env::var("HOME") {
         dirs.insert(0, PathBuf::from(home).join(".local/share/applications"));
     }

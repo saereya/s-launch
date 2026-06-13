@@ -29,3 +29,6 @@ commands = true
 # Result priority order — plugins listed first appear before later ones in results.
 # Remove or reorder entries to change which plugin's results show first.
 priority = ["apps", "commands"]
+# Terminal emulator for launching Terminal=true .desktop entries.
+# If unset, slaunch auto-detects from a built-in fallback list.
+# terminal = "foot"
