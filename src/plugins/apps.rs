@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::{Entry, EntryKind, Plugin};
-
-const FALLBACK_TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "xterm"];
+use super::{launch_in_terminal, Entry, EntryKind, Plugin};
 
 pub struct AppsPlugin {
     pub terminal: Option<String>,
@@ -154,37 +152,6 @@ fn launch_detached(exec: &str) {
     {
         tracing::error!("Failed to launch '{exec}': {e}");
     }
-}
-
-fn launch_in_terminal(exec: &str, terminal: Option<&str>) {
-    let Some(args) = parse_exec(exec) else { return };
-    if let Some(term) = terminal {
-        if let Err(e) = std::process::Command::new(term)
-            .arg("-e")
-            .args(&args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            tracing::error!("Failed to launch terminal '{term}': {e}");
-        }
-        return;
-    }
-    for term in FALLBACK_TERMINALS {
-        if std::process::Command::new(term)
-            .arg("-e")
-            .args(&args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .is_ok()
-        {
-            return;
-        }
-    }
-    tracing::error!("No terminal emulator found; set [plugins] terminal in config");
 }
 
 fn xdg_application_dirs() -> Vec<PathBuf> {

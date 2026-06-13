@@ -2,6 +2,37 @@ pub mod apps;
 pub mod commands;
 pub mod math;
 
+const FALLBACK_TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "xterm"];
+
+pub(super) fn launch_in_terminal(cmd: &str, terminal: Option<&str>) {
+    if shell_words::split(cmd).map_or(true, |a| a.is_empty()) {
+        tracing::error!("Empty or unparseable exec string: '{cmd}'");
+        return;
+    }
+    // Wrap in a shell so the terminal stays open after the command exits.
+    let shell_cmd = format!("{cmd}; exec $SHELL");
+    let spawn = |term: &str| {
+        std::process::Command::new(term)
+            .args(["-e", "sh", "-c", &shell_cmd])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+    };
+    if let Some(term) = terminal {
+        if let Err(e) = spawn(term) {
+            tracing::error!("Failed to launch terminal '{term}': {e}");
+        }
+        return;
+    }
+    for term in FALLBACK_TERMINALS {
+        if spawn(term).is_ok() {
+            return;
+        }
+    }
+    tracing::error!("No terminal emulator found; set [plugins] terminal in config");
+}
+
 /// A single searchable result that a plugin provides.
 #[derive(Debug, Clone)]
 pub struct Entry {

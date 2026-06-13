@@ -65,7 +65,9 @@ impl UiState {
                 EntryKind::App { .. } => {
                     AppsPlugin::new(self.config.plugins.terminal.clone()).launch(entry)
                 }
-                EntryKind::Command { .. } => CommandsPlugin.launch(entry),
+                EntryKind::Command { .. } => {
+                    CommandsPlugin::new(self.config.plugins.terminal.clone()).launch(entry)
+                }
                 EntryKind::MathResult { .. } => MathPlugin.launch(entry),
             }
         }

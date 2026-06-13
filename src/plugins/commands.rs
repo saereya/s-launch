@@ -1,9 +1,17 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use super::{Entry, EntryKind, Plugin};
+use super::{launch_in_terminal, Entry, EntryKind, Plugin};
 
-pub struct CommandsPlugin;
+pub struct CommandsPlugin {
+    pub terminal: Option<String>,
+}
+
+impl CommandsPlugin {
+    pub fn new(terminal: Option<String>) -> Self {
+        Self { terminal }
+    }
+}
 
 impl Plugin for CommandsPlugin {
     fn name(&self) -> &str {
@@ -42,15 +50,10 @@ impl Plugin for CommandsPlugin {
 
     fn launch(&self, entry: &Entry) {
         if let EntryKind::Command { path } = &entry.kind {
-            use std::process::Command;
-            if let Err(e) = Command::new(path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                tracing::error!("Failed to launch '{}': {e}", path.display());
-            }
+            launch_in_terminal(
+                path.to_str().unwrap_or_default(),
+                self.terminal.as_deref(),
+            );
         }
     }
 }

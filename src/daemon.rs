@@ -46,7 +46,9 @@ pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
             "apps" if cfg.plugins.apps => {
                 AppsPlugin::new(cfg.plugins.terminal.clone()).scan(&mut out)
             }
-            "commands" if cfg.plugins.commands => CommandsPlugin.scan(&mut out),
+            "commands" if cfg.plugins.commands => {
+                CommandsPlugin::new(cfg.plugins.terminal.clone()).scan(&mut out)
+            }
             _ => continue,
         }
         let p = priority as u8;
