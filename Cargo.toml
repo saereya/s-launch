@@ -42,6 +42,9 @@ evalexpr = "11"
 # Shell-word splitting for safe .desktop Exec parsing
 shell-words = "1"
 
+# Filesystem watching (inotify on Linux) for live app rescanning
+notify = "6"
+
 # Emoji data (Unicode names + shortcodes)
 emojis = "0.6"
 

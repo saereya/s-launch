@@ -154,7 +154,7 @@ fn launch_detached(exec: &str) {
     }
 }
 
-fn xdg_application_dirs() -> Vec<PathBuf> {
+pub(crate) fn xdg_application_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var("XDG_DATA_DIRS")
         .unwrap_or_else(|_| "/usr/local/share:/usr/share".into())
         .split(':')

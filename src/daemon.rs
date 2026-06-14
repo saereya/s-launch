@@ -1,4 +1,6 @@
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
@@ -61,12 +63,90 @@ pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
     out
 }
 
+/// Spawn a background task that watches XDG application dirs and PATH dirs
+/// for filesystem changes and rescans entries when any change is detected.
+///
+/// Uses a 500ms debounce window so rapid changes (e.g. a package install
+/// writing multiple files) collapse into a single rescan.
+pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config) {
+    use notify::{RecursiveMode, Watcher, recommended_watcher};
+
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    if cfg.plugins.apps {
+        dirs.extend(crate::plugins::apps::xdg_application_dirs());
+    }
+    if cfg.plugins.commands {
+        if let Ok(path_var) = std::env::var("PATH") {
+            for d in path_var.split(':') {
+                dirs.push(PathBuf::from(d));
+            }
+        }
+    }
+
+    if dirs.is_empty() {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        let mut watcher = match recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(event) = res {
+                use notify::EventKind::*;
+                if matches!(event.kind, Create(_) | Modify(_) | Remove(_)) {
+                    let _ = tx.try_send(());
+                }
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!("Failed to create filesystem watcher: {e}");
+                return;
+            }
+        };
+
+        let mut watched = 0usize;
+        for dir in &dirs {
+            if dir.exists() {
+                match watcher.watch(dir, RecursiveMode::NonRecursive) {
+                    Ok(()) => watched += 1,
+                    Err(e) => tracing::warn!("Cannot watch {}: {e}", dir.display()),
+                }
+            }
+        }
+        tracing::info!("Watching {watched} directories for filesystem changes");
+
+        loop {
+            if rx.recv().await.is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            while rx.try_recv().is_ok() {}
+
+            let cfg = state.config.read().await.clone();
+            match tokio::task::spawn_blocking(move || scan_entries(&cfg)).await {
+                Ok(entries) => {
+                    *state.entries.write().await = entries;
+                    tracing::info!("Entries rescanned due to filesystem change");
+                }
+                Err(e) => tracing::error!("Rescan task panicked: {e}"),
+            }
+        }
+    });
+}
+
 /// Run the IPC socket server loop.
 /// `tx` sends DaemonEvents into the Iced app subscription channel.
 pub async fn run_socket(
     state: Arc<DaemonState>,
     tx: mpsc::Sender<DaemonEvent>,
 ) -> anyhow::Result<()> {
+    {
+        let cfg = state.config.read().await;
+        spawn_watcher(state.clone(), &cfg);
+    }
+
     let socket_path = ipc::socket_path();
 
     if socket_path.exists() {
