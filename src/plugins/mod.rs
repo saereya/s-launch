@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod commands;
+pub mod emoji;
 pub mod math;
 
 const FALLBACK_TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "xterm"];
@@ -56,6 +57,8 @@ pub enum EntryKind {
     Command { path: std::path::PathBuf },
     /// Evaluated math expression; value is copied to clipboard on launch
     MathResult { value: String },
+    /// Emoji character; copied to clipboard on launch
+    EmojiResult { emoji: String },
 }
 
 /// Static plugin interface — all plugins are compiled in and registered at startup.

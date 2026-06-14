@@ -14,8 +14,8 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 use crate::daemon::{DaemonEvent, DaemonState};
 use crate::plugins::{
-    apps::AppsPlugin, commands::CommandsPlugin, math::MathPlugin, Entry as AppEntry, EntryKind,
-    Plugin,
+    apps::AppsPlugin, commands::CommandsPlugin, emoji::EmojiPlugin, math::MathPlugin,
+    Entry as AppEntry, EntryKind, Plugin,
 };
 use crate::search::Searcher;
 
@@ -47,6 +47,11 @@ impl UiState {
             let mut math_out = Vec::new();
             MathPlugin.query(&self.query, &mut math_out);
             self.results = math_out;
+        } else if self.query.starts_with(':') {
+            let mut emoji_out = Vec::new();
+            EmojiPlugin.query(&self.query, &mut emoji_out);
+            emoji_out.truncate(self.config.window.max_results);
+            self.results = emoji_out;
         } else {
             self.searcher.update_pattern(&self.query);
             self.results = self
@@ -69,6 +74,7 @@ impl UiState {
                     CommandsPlugin::new(self.config.plugins.terminal.clone()).launch(entry)
                 }
                 EntryKind::MathResult { .. } => MathPlugin.launch(entry),
+                EntryKind::EmojiResult { .. } => EmojiPlugin.launch(entry),
             }
         }
     }
