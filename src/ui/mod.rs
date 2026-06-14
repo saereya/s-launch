@@ -453,6 +453,21 @@ fn build_ui(
                         provider.load_from_string(&new_css);
                         rebuild_list(&list, &state.borrow());
                     }
+                    DaemonEvent::EntriesUpdated => {
+                        let new_entries = state
+                            .borrow()
+                            .daemon_state
+                            .entries
+                            .try_read()
+                            .map(|g| g.clone())
+                            .unwrap_or_default();
+                        {
+                            let mut s = state.borrow_mut();
+                            s.searcher.reload(new_entries);
+                            s.refresh_results();
+                        }
+                        rebuild_list(&list, &state.borrow());
+                    }
                     DaemonEvent::Quit => {
                         app.quit();
                     }

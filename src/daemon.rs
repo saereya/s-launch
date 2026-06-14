@@ -18,6 +18,7 @@ pub enum DaemonEvent {
     Show,
     Hide,
     ReloadConfig(Box<Config>),
+    EntriesUpdated,
     Quit,
 }
 
@@ -68,7 +69,7 @@ pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
 ///
 /// Uses a 500ms debounce window so rapid changes (e.g. a package install
 /// writing multiple files) collapse into a single rescan.
-pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config) {
+pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config, ui_tx: mpsc::Sender<DaemonEvent>) {
     use notify::{RecursiveMode, Watcher, recommended_watcher};
 
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -129,6 +130,7 @@ pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config) {
                 Ok(entries) => {
                     *state.entries.write().await = entries;
                     tracing::info!("Entries rescanned due to filesystem change");
+                    let _ = ui_tx.send(DaemonEvent::EntriesUpdated).await;
                 }
                 Err(e) => tracing::error!("Rescan task panicked: {e}"),
             }
@@ -144,7 +146,7 @@ pub async fn run_socket(
 ) -> anyhow::Result<()> {
     {
         let cfg = state.config.read().await;
-        spawn_watcher(state.clone(), &cfg);
+        spawn_watcher(state.clone(), &cfg, tx.clone());
     }
 
     let socket_path = ipc::socket_path();
