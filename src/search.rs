@@ -41,7 +41,7 @@ impl Searcher {
         self.nucleo.pattern.reparse(
             0,
             query,
-            CaseMatching::Smart,
+            CaseMatching::Ignore,
             Normalization::Smart,
             false,
         );
