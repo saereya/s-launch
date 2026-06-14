@@ -55,6 +55,15 @@ fn main() {
 // ── Daemon entry point ────────────────────────────────────────────────────────
 
 fn run_daemon() -> anyhow::Result<()> {
+    // Auto-reap launched children. We spawn apps/wl-copy with std::process and
+    // never wait() on them, so without this each one becomes a zombie when it
+    // exits. Ignoring SIGCHLD makes the kernel reap them automatically.
+    // SAFETY: setting a signal disposition has no preconditions; we never call
+    // wait() ourselves so the ECHILD interaction with SIG_IGN doesn't apply.
+    unsafe {
+        libc::signal(libc::SIGCHLD, libc::SIG_IGN);
+    }
+
     let cfg = config::load();
     tracing::info!("Starting slaunch daemon");
 

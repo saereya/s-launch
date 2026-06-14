@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::{launch_in_terminal, Entry, EntryKind, Plugin};
@@ -20,7 +20,10 @@ impl Plugin for AppsPlugin {
 
     fn scan(&self, out: &mut Vec<Entry>) {
         let dirs = xdg_application_dirs();
-        let mut seen: HashMap<String, ()> = HashMap::new();
+        // Dedup by desktop file ID (the .desktop filename). Dirs are scanned in
+        // priority order (~/.local first), so the first occurrence of an ID wins
+        // and shadows lower-priority dirs — matching the XDG override semantics.
+        let mut seen: HashSet<String> = HashSet::new();
 
         for dir in &dirs {
             let Ok(read) = std::fs::read_dir(dir) else { continue };
@@ -29,14 +32,18 @@ impl Plugin for AppsPlugin {
                 if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
                     continue;
                 }
+                let Some(id) = path.file_name().and_then(|n| n.to_str()) else { continue };
+                // Mark seen even if it later fails to parse / is hidden, so a
+                // higher-priority Hidden entry suppresses lower-priority copies.
+                if !seen.insert(id.to_string()) {
+                    continue;
+                }
                 let raw = match std::fs::read_to_string(&path) {
                     Ok(s) => s,
                     Err(_) => continue,
                 };
                 if let Some(app_entry) = parse_desktop(&raw, &path) {
-                    if seen.insert(app_entry.name.clone(), ()).is_none() {
-                        out.push(app_entry);
-                    }
+                    out.push(app_entry);
                 }
             }
         }
@@ -114,12 +121,17 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
 }
 
 /// Strip %u, %U, %f, %F, %i, %c, %k field codes from Exec values.
+/// Per the desktop spec, `%%` is an escaped literal percent sign.
 fn strip_field_codes(exec: &str) -> String {
     let mut out = String::with_capacity(exec.len());
     let mut chars = exec.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '%' {
-            chars.next();
+            // Consume the following code character; `%%` collapses to one `%`.
+            match chars.next() {
+                Some('%') => out.push('%'),
+                _ => {} // drop the field code (or trailing lone `%`)
+            }
         } else {
             out.push(c);
         }

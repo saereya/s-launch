@@ -38,7 +38,6 @@ struct UiState {
     query: String,
     selected: usize,
     results: Vec<AppEntry>,
-    daemon_state: Arc<DaemonState>,
 }
 
 impl UiState {
@@ -315,7 +314,6 @@ fn build_ui(
         query: String::new(),
         selected: 0,
         results: initial_results,
-        daemon_state,
     }));
 
     rebuild_list(&list, &state.borrow());
@@ -380,7 +378,8 @@ fn build_ui(
                 return glib::Propagation::Stop;
             }
 
-            if key == K::Up {
+            // ISO_Left_Tab is the keyval compositors emit for Shift+Tab.
+            if key == K::Up || key == K::ISO_Left_Tab {
                 {
                     let mut s = state.borrow_mut();
                     if s.selected > 0 {
@@ -435,35 +434,21 @@ fn build_ui(
                         entry_ref.set_text(""); // fires connect_changed
                         window_ref.set_visible(false);
                     }
-                    DaemonEvent::ReloadConfig(new_cfg) => {
-                        let new_entries = state
-                            .borrow()
-                            .daemon_state
-                            .entries
-                            .try_read()
-                            .map(|g| g.clone())
-                            .unwrap_or_default();
+                    DaemonEvent::ReloadConfig { config: new_cfg, entries } => {
                         let new_css = load_user_css();
                         {
                             let mut s = state.borrow_mut();
-                            s.searcher.reload(new_entries);
+                            s.searcher.reload(entries);
                             s.config = *new_cfg;
                             s.refresh_results();
                         }
                         provider.load_from_string(&new_css);
                         rebuild_list(&list, &state.borrow());
                     }
-                    DaemonEvent::EntriesUpdated => {
-                        let new_entries = state
-                            .borrow()
-                            .daemon_state
-                            .entries
-                            .try_read()
-                            .map(|g| g.clone())
-                            .unwrap_or_default();
+                    DaemonEvent::EntriesUpdated(entries) => {
                         {
                             let mut s = state.borrow_mut();
-                            s.searcher.reload(new_entries);
+                            s.searcher.reload(entries);
                             s.refresh_results();
                         }
                         rebuild_list(&list, &state.borrow());

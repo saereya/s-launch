@@ -40,8 +40,11 @@ impl Command {
 }
 
 pub fn socket_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/1000"));
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
+        // SAFETY: getuid is always successful and has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        format!("/run/user/{uid}")
+    });
     PathBuf::from(runtime_dir).join("slaunch.sock")
 }
 

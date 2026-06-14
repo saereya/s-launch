@@ -17,8 +17,11 @@ use crate::plugins::commands::CommandsPlugin;
 pub enum DaemonEvent {
     Show,
     Hide,
-    ReloadConfig(Box<Config>),
-    EntriesUpdated,
+    ReloadConfig {
+        config: Box<Config>,
+        entries: Vec<Entry>,
+    },
+    EntriesUpdated(Vec<Entry>),
     Quit,
 }
 
@@ -128,9 +131,9 @@ pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config, ui_tx: mpsc::Sender<
             let cfg = state.config.read().await.clone();
             match tokio::task::spawn_blocking(move || scan_entries(&cfg)).await {
                 Ok(entries) => {
-                    *state.entries.write().await = entries;
+                    *state.entries.write().await = entries.clone();
                     tracing::info!("Entries rescanned due to filesystem change");
-                    let _ = ui_tx.send(DaemonEvent::EntriesUpdated).await;
+                    let _ = ui_tx.send(DaemonEvent::EntriesUpdated(entries)).await;
                 }
                 Err(e) => tracing::error!("Rescan task panicked: {e}"),
             }
@@ -152,10 +155,27 @@ pub async fn run_socket(
     let socket_path = ipc::socket_path();
 
     if socket_path.exists() {
-        std::fs::remove_file(&socket_path)?;
+        // Probe for a live daemon before clobbering the socket. If a connection
+        // succeeds another instance owns it; otherwise it's a stale file to clear.
+        match tokio::net::UnixStream::connect(&socket_path).await {
+            Ok(_) => anyhow::bail!(
+                "another slaunch daemon is already running ({})",
+                socket_path.display()
+            ),
+            Err(_) => std::fs::remove_file(&socket_path)?,
+        }
     }
 
     let listener = UnixListener::bind(&socket_path)?;
+    // Restrict to the owner; control of this socket means control of launches.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        {
+            tracing::warn!("Could not restrict socket permissions: {e}");
+        }
+    }
     tracing::info!("IPC socket listening at {}", socket_path.display());
 
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -188,8 +208,11 @@ pub async fn run_socket(
                                     let new_cfg = config::load();
                                     let new_entries = scan_entries(&new_cfg);
                                     *state.config.write().await = new_cfg.clone();
-                                    *state.entries.write().await = new_entries;
-                                    let _ = tx.send(DaemonEvent::ReloadConfig(Box::new(new_cfg))).await;
+                                    *state.entries.write().await = new_entries.clone();
+                                    let _ = tx.send(DaemonEvent::ReloadConfig {
+                                        config: Box::new(new_cfg),
+                                        entries: new_entries,
+                                    }).await;
                                     RESP_OK
                                 }
                                 Some(Command::Kill) => {

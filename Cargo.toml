@@ -48,6 +48,9 @@ notify = "6"
 # Emoji data (Unicode names + shortcodes)
 emojis = "0.6"
 
+# Real uid lookup (socket path fallback) and SIGCHLD reaping
+libc = "0.2"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
