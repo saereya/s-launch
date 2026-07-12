@@ -414,6 +414,23 @@ fn build_ui(
         });
     }
 
+    // ── Persist across compositor dismissals ────────────────────────────────
+    // The launcher is a long-lived daemon whose window is only ever hidden, not
+    // destroyed. GtkApplication keeps app.run() alive only while it owns a
+    // window, so if the compositor closes the layer surface (output hotplug,
+    // monitor sleep/wake, reconfigure, dismiss gesture), GTK's default handler
+    // would destroy the toplevel, drop the window count to zero, and return from
+    // app.run() — silently killing the daemon. Intercept the request, hide
+    // instead, and stop propagation so the default destroy handler never runs.
+    {
+        let entry_ref = search_entry.clone();
+        window.connect_close_request(move |win| {
+            entry_ref.set_text(""); // fires connect_changed → clears query + list
+            win.set_visible(false);
+            glib::Propagation::Stop
+        });
+    }
+
     // ── IPC events on the glib main loop ─────────────────────────────────────
     // spawn_local runs this future on the glib event loop (main thread only),
     // so Rc<RefCell<...>> and GTK widgets can be captured without Send bounds.

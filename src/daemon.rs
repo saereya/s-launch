@@ -185,7 +185,16 @@ pub async fn run_socket(
         tokio::select! {
             res = listener.accept() => {
                 match res {
-                    Err(e) => break Err(e.into()),
+                    Err(e) => {
+                        // A failed accept (e.g. EMFILE from fd exhaustion, or a
+                        // transient ECONNABORTED) must not tear down the socket:
+                        // that would strand a live daemon with no IPC endpoint,
+                        // so `slaunch show` silently stops working. Log and keep
+                        // serving. The short backoff avoids a hot spin if the
+                        // condition persists.
+                        tracing::warn!("IPC accept failed: {e}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                     Ok((mut stream, _)) => {
                         let state = state.clone();
                         let tx = tx.clone();
