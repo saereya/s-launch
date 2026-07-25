@@ -8,6 +8,9 @@ starting a fresh process each time.
 For architecture and internals (threading model, plugin system, GTK
 gotchas), see [CLAUDE.md](CLAUDE.md) once you're past this file.
 
+<img width="665" height="344" alt="image" src="https://github.com/user-attachments/assets/d380d3a5-368e-46fb-afc5-13e655c8a033" />
+
+
 ## Prerequisites
 
 - A Wayland compositor with `wlr-layer-shell` support (Sway, Hyprland,
