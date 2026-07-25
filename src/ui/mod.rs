@@ -363,7 +363,7 @@ fn build_ui(
                 return glib::Propagation::Stop;
             }
 
-            if key == K::Return {
+            if key == K::Return || key == K::KP_Enter {
                 {
                     let s = state.borrow();
                     s.launch_at(s.selected);
