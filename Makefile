@@ -1,7 +1,7 @@
 BINARY       := slaunch
 RELEASE_BIN  := target/release/$(BINARY)
 
-PREFIX       ?= $(HOME)/.local
+PREFIX       ?= /usr/local
 BIN_DIR      := $(PREFIX)/bin
 CONFIG_DIR   := $(HOME)/.config/$(BINARY)
 
