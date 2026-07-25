@@ -2,6 +2,7 @@ pub mod apps;
 pub mod commands;
 pub mod emoji;
 pub mod math;
+pub mod power;
 
 const FALLBACK_TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "xterm"];
 
@@ -59,6 +60,8 @@ pub enum EntryKind {
     MathResult { value: String },
     /// Emoji character; copied to clipboard on launch
     EmojiResult { emoji: String },
+    /// System power/session action; command is spawned via a shell-word split on launch
+    Power { command: String },
 }
 
 /// Static plugin interface — all plugins are compiled in and registered at startup.

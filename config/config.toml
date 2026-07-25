@@ -26,9 +26,23 @@ placeholder = "Search..."
 apps = true
 # Executables found on $PATH
 commands = true
+# System power/session actions (shutdown, reboot, suspend, lock)
+power = true
 # Result priority order — plugins listed first appear before later ones in results.
 # Remove or reorder entries to change which plugin's results show first.
-priority = ["apps", "commands"]
+priority = ["apps", "commands", "power"]
 # Terminal emulator for launching Terminal=true .desktop entries.
 # If unset, slaunch auto-detects from a built-in fallback list.
 # terminal = "foot"
+
+[plugins.power_commands]
+# Shell command run for each power plugin entry. Defaults target systemd/logind;
+# override per-action for other init systems, or set to "" to remove that entry
+# from results entirely (e.g. no lock daemon configured).
+shutdown = "systemctl poweroff"
+reboot = "systemctl reboot"
+suspend = "systemctl suspend"
+# Works if your compositor runs an idle/lock daemon (swayidle, hypridle, ...)
+# listening for logind's Lock signal. Otherwise point this at your locker directly,
+# e.g. lock = "swaylock".
+lock = "loginctl lock-session"

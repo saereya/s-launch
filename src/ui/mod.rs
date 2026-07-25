@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::daemon::{DaemonEvent, DaemonState};
 use crate::plugins::{
     apps::AppsPlugin, commands::CommandsPlugin, emoji::EmojiPlugin, math::MathPlugin,
-    Entry as AppEntry, EntryKind, Plugin,
+    power::PowerPlugin, Entry as AppEntry, EntryKind, Plugin,
 };
 use crate::search::Searcher;
 
@@ -77,6 +77,9 @@ impl UiState {
                 }
                 EntryKind::MathResult { .. } => MathPlugin.launch(entry),
                 EntryKind::EmojiResult { .. } => EmojiPlugin.launch(entry),
+                EntryKind::Power { .. } => {
+                    PowerPlugin::new(self.config.plugins.power_commands.clone()).launch(entry)
+                }
             }
         }
     }

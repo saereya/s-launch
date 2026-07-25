@@ -10,6 +10,7 @@ use crate::config::{self, Config};
 use crate::ipc::{self, Command, RESP_ERR, RESP_OK};
 use crate::plugins::apps::AppsPlugin;
 use crate::plugins::commands::CommandsPlugin;
+use crate::plugins::power::PowerPlugin;
 use crate::plugins::{Entry, Plugin};
 
 /// Messages the IPC listener sends into the Iced application.
@@ -54,6 +55,9 @@ pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
             }
             "commands" if cfg.plugins.commands => {
                 CommandsPlugin::new(cfg.plugins.terminal.clone()).scan(&mut out)
+            }
+            "power" if cfg.plugins.power => {
+                PowerPlugin::new(cfg.plugins.power_commands.clone()).scan(&mut out)
             }
             _ => continue,
         }

@@ -39,10 +39,24 @@ pub struct InputConfig {
 pub struct PluginsConfig {
     pub apps: bool,
     pub commands: bool,
+    pub power: bool,
     /// Order determines result priority: first entry appears before later ones.
     pub priority: Vec<String>,
     /// Terminal emulator to use for Terminal=true apps. None = auto-detect.
     pub terminal: Option<String>,
+    /// Shell command run for each power plugin action. An empty string omits
+    /// that action from results entirely, so individual actions (e.g. "lock"
+    /// on a setup with no lock daemon) can be disabled without touching `power`.
+    pub power_commands: PowerCommands,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PowerCommands {
+    pub shutdown: String,
+    pub reboot: String,
+    pub suspend: String,
+    pub lock: String,
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -84,8 +98,23 @@ impl Default for PluginsConfig {
         Self {
             apps: true,
             commands: true,
-            priority: vec!["apps".into(), "commands".into()],
+            power: true,
+            priority: vec!["apps".into(), "commands".into(), "power".into()],
             terminal: None,
+            power_commands: PowerCommands::default(),
+        }
+    }
+}
+
+impl Default for PowerCommands {
+    fn default() -> Self {
+        Self {
+            // systemd/logind defaults, since that's what most distros run;
+            // override per-action in config.toml on other init systems.
+            shutdown: "systemctl poweroff".into(),
+            reboot: "systemctl reboot".into(),
+            suspend: "systemctl suspend".into(),
+            lock: "loginctl lock-session".into(),
         }
     }
 }
@@ -148,8 +177,13 @@ mod tests {
         assert_eq!(cfg.input.placeholder, "Search...");
         assert!(cfg.plugins.apps);
         assert!(cfg.plugins.commands);
-        assert_eq!(cfg.plugins.priority, vec!["apps", "commands"]);
+        assert!(cfg.plugins.power);
+        assert_eq!(cfg.plugins.priority, vec!["apps", "commands", "power"]);
         assert_eq!(cfg.plugins.terminal, None);
+        assert_eq!(cfg.plugins.power_commands.shutdown, "systemctl poweroff");
+        assert_eq!(cfg.plugins.power_commands.reboot, "systemctl reboot");
+        assert_eq!(cfg.plugins.power_commands.suspend, "systemctl suspend");
+        assert_eq!(cfg.plugins.power_commands.lock, "loginctl lock-session");
     }
 
     #[test]
@@ -193,8 +227,15 @@ mod tests {
             [plugins]
             apps = false
             commands = false
+            power = false
             priority = ["commands", "apps"]
             terminal = "foot"
+
+            [plugins.power_commands]
+            shutdown = "doas poweroff"
+            reboot = "doas reboot"
+            suspend = ""
+            lock = "swaylock"
         "#;
         let cfg: Config = toml::from_str(raw).expect("valid full config");
         assert_eq!(cfg.window.width, 500);
@@ -207,8 +248,13 @@ mod tests {
         assert_eq!(cfg.input.placeholder, "Type...");
         assert!(!cfg.plugins.apps);
         assert!(!cfg.plugins.commands);
+        assert!(!cfg.plugins.power);
         assert_eq!(cfg.plugins.priority, vec!["commands", "apps"]);
         assert_eq!(cfg.plugins.terminal.as_deref(), Some("foot"));
+        assert_eq!(cfg.plugins.power_commands.shutdown, "doas poweroff");
+        assert_eq!(cfg.plugins.power_commands.reboot, "doas reboot");
+        assert_eq!(cfg.plugins.power_commands.suspend, "");
+        assert_eq!(cfg.plugins.power_commands.lock, "swaylock");
     }
 
     #[test]
