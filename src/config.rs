@@ -130,3 +130,155 @@ pub fn load() -> Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_matches_documented_values() {
+        let cfg = Config::default();
+        assert_eq!(cfg.window.width, 640);
+        assert_eq!(cfg.window.max_results, 12);
+        assert_eq!(cfg.window.monitor, "focused");
+        assert_eq!(cfg.window.anchor, "center");
+        assert_eq!(cfg.window.margin, 60);
+        assert_eq!(cfg.window.item_height, 40);
+        assert_eq!(cfg.window.padding, 10);
+        assert_eq!(cfg.input.placeholder, "Search...");
+        assert!(cfg.plugins.apps);
+        assert!(cfg.plugins.commands);
+        assert_eq!(cfg.plugins.priority, vec!["apps", "commands"]);
+        assert_eq!(cfg.plugins.terminal, None);
+    }
+
+    #[test]
+    fn empty_toml_falls_back_to_all_defaults() {
+        let cfg: Config = toml::from_str("").expect("empty document is valid");
+        assert_eq!(cfg.window.width, Config::default().window.width);
+        assert_eq!(cfg.plugins.priority, Config::default().plugins.priority);
+    }
+
+    #[test]
+    fn partial_toml_overrides_only_specified_fields() {
+        let raw = r#"
+            [window]
+            width = 800
+            anchor = "bottom"
+        "#;
+        let cfg: Config = toml::from_str(raw).expect("valid partial config");
+        assert_eq!(cfg.window.width, 800);
+        assert_eq!(cfg.window.anchor, "bottom");
+        // Untouched fields keep their defaults.
+        assert_eq!(cfg.window.max_results, 12);
+        assert_eq!(cfg.window.margin, 60);
+        assert!(cfg.plugins.apps);
+    }
+
+    #[test]
+    fn full_toml_overrides_every_field() {
+        let raw = r#"
+            [window]
+            width = 500
+            max_results = 5
+            monitor = "eDP-1"
+            anchor = "top"
+            margin = 20
+            item_height = 30
+            padding = 4
+
+            [input]
+            placeholder = "Type..."
+
+            [plugins]
+            apps = false
+            commands = false
+            priority = ["commands", "apps"]
+            terminal = "foot"
+        "#;
+        let cfg: Config = toml::from_str(raw).expect("valid full config");
+        assert_eq!(cfg.window.width, 500);
+        assert_eq!(cfg.window.max_results, 5);
+        assert_eq!(cfg.window.monitor, "eDP-1");
+        assert_eq!(cfg.window.anchor, "top");
+        assert_eq!(cfg.window.margin, 20);
+        assert_eq!(cfg.window.item_height, 30);
+        assert_eq!(cfg.window.padding, 4);
+        assert_eq!(cfg.input.placeholder, "Type...");
+        assert!(!cfg.plugins.apps);
+        assert!(!cfg.plugins.commands);
+        assert_eq!(cfg.plugins.priority, vec!["commands", "apps"]);
+        assert_eq!(cfg.plugins.terminal.as_deref(), Some("foot"));
+    }
+
+    #[test]
+    fn malformed_toml_is_rejected_by_the_parser() {
+        // load() falls back to Config::default() on this Err; we assert the
+        // parser actually rejects it, since that's the branch load() depends on.
+        let raw = "window = not valid toml {{{";
+        assert!(toml::from_str::<Config>(raw).is_err());
+    }
+
+    #[test]
+    fn wrong_field_type_is_rejected_by_the_parser() {
+        let raw = r#"
+            [window]
+            width = "not a number"
+        "#;
+        assert!(toml::from_str::<Config>(raw).is_err());
+    }
+
+    #[test]
+    fn load_returns_default_when_config_file_absent() {
+        let _guard = crate::test_env::lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _xdg = unsafe {
+            crate::test_env::EnvVarGuard::set(
+                "XDG_CONFIG_HOME",
+                tmp.path().to_str().expect("utf8 path"),
+            )
+        };
+        assert!(!config_path().exists());
+        let cfg = load();
+        assert_eq!(cfg.window.width, Config::default().window.width);
+    }
+
+    #[test]
+    fn load_reads_and_parses_an_existing_config_file() {
+        let _guard = crate::test_env::lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _xdg = unsafe {
+            crate::test_env::EnvVarGuard::set(
+                "XDG_CONFIG_HOME",
+                tmp.path().to_str().expect("utf8 path"),
+            )
+        };
+        let dir = config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(config_path(), "[window]\nwidth = 999\n").unwrap();
+
+        let cfg = load();
+        assert_eq!(cfg.window.width, 999);
+    }
+
+    #[test]
+    fn load_falls_back_to_default_on_parse_error() {
+        let _guard = crate::test_env::lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _xdg = unsafe {
+            crate::test_env::EnvVarGuard::set(
+                "XDG_CONFIG_HOME",
+                tmp.path().to_str().expect("utf8 path"),
+            )
+        };
+        let dir = config_path().parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(config_path(), "not valid toml {{{").unwrap();
+
+        let cfg = load();
+        assert_eq!(cfg.window.width, Config::default().window.width);
+    }
+}

@@ -24,7 +24,10 @@ fn load_user_css() -> String {
     match std::fs::read_to_string(&path) {
         Ok(css) => css,
         Err(_) => {
-            tracing::warn!("No stylesheet at {}; window will use system theme", path.display());
+            tracing::warn!(
+                "No stylesheet at {}; window will use system theme",
+                path.display()
+            );
             String::new()
         }
     }
@@ -83,7 +86,9 @@ impl UiState {
 
 fn scroll_to_row(scroll: &ScrolledWindow, row: &ListBoxRow) {
     let Some(list) = row.parent() else { return };
-    let Some(bounds) = row.compute_bounds(&list) else { return };
+    let Some(bounds) = row.compute_bounds(&list) else {
+        return;
+    };
 
     let adj = scroll.vadjustment();
     let row_y = bounds.y() as f64;
@@ -194,9 +199,7 @@ pub fn run(
         });
     });
 
-    let app = Application::builder()
-        .application_id("dev.slaunch")
-        .build();
+    let app = Application::builder().application_id("dev.slaunch").build();
 
     // Cell lets us take the receiver exactly once inside the activate closure
     // without needing Rc (connect_activate doesn't require Send).
@@ -223,8 +226,16 @@ fn build_ui(
     daemon_state: Arc<DaemonState>,
 ) {
     // try_read() is non-blocking; by the time activate fires, no writer is active.
-    let config = daemon_state.config.try_read().map(|g| g.clone()).unwrap_or_default();
-    let entries = daemon_state.entries.try_read().map(|g| g.clone()).unwrap_or_default();
+    let config = daemon_state
+        .config
+        .try_read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let entries = daemon_state
+        .entries
+        .try_read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
     let app = app.clone();
 
     // CSS at highest priority — fully overrides the system theme for our window.
@@ -279,8 +290,7 @@ fn build_ui(
     let list = ListBox::new();
     list.set_selection_mode(gtk4::SelectionMode::Single);
 
-    let max_list_height =
-        (config.window.max_results * config.window.item_height as usize) as i32;
+    let max_list_height = (config.window.max_results * config.window.item_height as usize) as i32;
     let scroll = ScrolledWindow::builder()
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
         .hscrollbar_policy(gtk4::PolicyType::Never)
@@ -451,7 +461,10 @@ fn build_ui(
                         entry_ref.set_text(""); // fires connect_changed
                         window_ref.set_visible(false);
                     }
-                    DaemonEvent::ReloadConfig { config: new_cfg, entries } => {
+                    DaemonEvent::ReloadConfig {
+                        config: new_cfg,
+                        entries,
+                    } => {
                         let new_css = load_user_css();
                         {
                             let mut s = state.borrow_mut();

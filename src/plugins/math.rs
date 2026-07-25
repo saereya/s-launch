@@ -48,3 +48,90 @@ fn format_value(value: &evalexpr::Value) -> String {
         other => other.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn query(input: &str) -> Vec<Entry> {
+        let mut out = Vec::new();
+        MathPlugin.query(input, &mut out);
+        out
+    }
+
+    #[test]
+    fn evaluates_simple_expression() {
+        let out = query("=1+2");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "3");
+    }
+
+    #[test]
+    fn strips_leading_equals_and_whitespace() {
+        let out = query("=  2 * 3  ");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "6");
+    }
+
+    #[test]
+    fn whole_number_float_result_drops_decimal_point() {
+        let out = query("=6/2");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "3");
+    }
+
+    #[test]
+    fn fractional_float_result_keeps_decimals() {
+        // A float operand forces float division (5/2 with two ints performs
+        // integer division in evalexpr and would yield "2", not "2.5").
+        let out = query("=5.0/2");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "2.5");
+    }
+
+    #[test]
+    fn empty_expression_produces_no_entry() {
+        assert!(query("=").is_empty());
+        assert!(query("=   ").is_empty());
+    }
+
+    #[test]
+    fn invalid_expression_produces_no_entry() {
+        assert!(query("=this is not math").is_empty());
+    }
+
+    #[test]
+    fn description_shows_the_normalized_expression() {
+        let out = query("=1+2");
+        assert_eq!(out[0].description.as_deref(), Some("= 1+2"));
+    }
+
+    #[test]
+    fn entry_kind_carries_the_formatted_value_for_clipboard_copy() {
+        let out = query("=1+2");
+        match &out[0].kind {
+            EntryKind::MathResult { value } => assert_eq!(value, "3"),
+            _ => panic!("expected MathResult kind"),
+        }
+    }
+
+    #[test]
+    fn format_value_int() {
+        assert_eq!(format_value(&evalexpr::Value::Int(42)), "42");
+    }
+
+    #[test]
+    fn format_value_whole_float() {
+        assert_eq!(format_value(&evalexpr::Value::Float(4.0)), "4");
+    }
+
+    #[test]
+    fn format_value_fractional_float() {
+        assert_eq!(format_value(&evalexpr::Value::Float(4.5)), "4.5");
+    }
+
+    #[test]
+    fn format_value_boolean() {
+        assert_eq!(format_value(&evalexpr::Value::Boolean(true)), "true");
+    }
+}

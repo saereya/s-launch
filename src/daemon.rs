@@ -3,14 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
-use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{RwLock, mpsc};
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::{mpsc, RwLock};
 
 use crate::config::{self, Config};
 use crate::ipc::{self, Command, RESP_ERR, RESP_OK};
-use crate::plugins::{Entry, Plugin};
 use crate::plugins::apps::AppsPlugin;
 use crate::plugins::commands::CommandsPlugin;
+use crate::plugins::{Entry, Plugin};
 
 /// Messages the IPC listener sends into the Iced application.
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
 /// Uses a 500ms debounce window so rapid changes (e.g. a package install
 /// writing multiple files) collapse into a single rescan.
 pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config, ui_tx: mpsc::Sender<DaemonEvent>) {
-    use notify::{RecursiveMode, Watcher, recommended_watcher};
+    use notify::{recommended_watcher, RecursiveMode, Watcher};
 
     let mut dirs: Vec<PathBuf> = Vec::new();
 
@@ -254,4 +254,91 @@ pub async fn run_socket(
 
     let _ = std::fs::remove_file(&socket_path);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn disabled_config(priority: Vec<&str>) -> Config {
+        Config {
+            plugins: crate::config::PluginsConfig {
+                apps: false,
+                commands: false,
+                priority: priority.into_iter().map(String::from).collect(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn both_plugins_disabled_yields_no_entries() {
+        let cfg = disabled_config(vec!["apps", "commands"]);
+        assert!(scan_entries(&cfg).is_empty());
+    }
+
+    #[test]
+    fn empty_priority_list_yields_no_entries() {
+        let cfg = disabled_config(vec![]);
+        assert!(scan_entries(&cfg).is_empty());
+    }
+
+    #[test]
+    fn unknown_plugin_name_in_priority_is_skipped() {
+        let cfg = disabled_config(vec!["not-a-real-plugin"]);
+        assert!(scan_entries(&cfg).is_empty());
+    }
+
+    #[test]
+    fn scan_entries_assigns_priority_by_position_in_config_order() {
+        // Isolate both plugins in temp dirs seeded with one known entry each,
+        // so priority assignment can be asserted without depending on what's
+        // actually installed on the machine running the suite.
+        let _guard = crate::test_env::lock();
+        let home = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+
+        let apps_dir = home.path().join(".local/share/applications");
+        std::fs::create_dir_all(&apps_dir).unwrap();
+        std::fs::write(
+            apps_dir.join("testapp.desktop"),
+            "[Desktop Entry]\nName=Test App\nExec=testapp\n",
+        )
+        .unwrap();
+
+        let cmd_path = path_dir.path().join("testcmd");
+        std::fs::write(&cmd_path, b"#!/bin/sh\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cmd_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _home =
+            unsafe { crate::test_env::EnvVarGuard::set("HOME", home.path().to_str().unwrap()) };
+        let _xdg = unsafe {
+            // No system dirs, so the only app found is the one seeded above.
+            crate::test_env::EnvVarGuard::set("XDG_DATA_DIRS", path_dir.path().to_str().unwrap())
+        };
+        let _path =
+            unsafe { crate::test_env::EnvVarGuard::set("PATH", path_dir.path().to_str().unwrap()) };
+
+        let cfg = Config {
+            plugins: crate::config::PluginsConfig {
+                priority: vec!["commands".into(), "apps".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let entries = scan_entries(&cfg);
+        let cmd_entry = entries.iter().find(|e| e.name == "testcmd").unwrap();
+        let app_entry = entries.iter().find(|e| e.name == "Test App").unwrap();
+        // "commands" is listed first in priority, so it gets the lower (higher
+        // priority) number, regardless of the fixed apps-then-commands match
+        // arm order in scan_entries' source.
+        assert_eq!(cmd_entry.priority, 0);
+        assert_eq!(app_entry.priority, 1);
+    }
 }

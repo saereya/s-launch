@@ -51,6 +51,9 @@ emojis = "0.6"
 # Real uid lookup (socket path fallback) and SIGCHLD reaping
 libc = "0.2"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

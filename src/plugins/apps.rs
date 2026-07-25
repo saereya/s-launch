@@ -26,13 +26,17 @@ impl Plugin for AppsPlugin {
         let mut seen: HashSet<String> = HashSet::new();
 
         for dir in &dirs {
-            let Ok(read) = std::fs::read_dir(dir) else { continue };
+            let Ok(read) = std::fs::read_dir(dir) else {
+                continue;
+            };
             for entry in read.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
                     continue;
                 }
-                let Some(id) = path.file_name().and_then(|n| n.to_str()) else { continue };
+                let Some(id) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
                 // Mark seen even if it later fails to parse / is hidden, so a
                 // higher-priority Hidden entry suppresses lower-priority copies.
                 if !seen.insert(id.to_string()) {
@@ -101,7 +105,11 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
         return None;
     }
 
-    let icon = if icon_name.is_empty() { None } else { Some(icon_name) };
+    let icon = if icon_name.is_empty() {
+        None
+    } else {
+        Some(icon_name)
+    };
     let description = if generic_name.is_empty() {
         path.parent()
             .and_then(|p| p.file_name())
@@ -177,4 +185,198 @@ pub(crate) fn xdg_application_dirs() -> Vec<PathBuf> {
         dirs.insert(0, PathBuf::from(home).join(".local/share/applications"));
     }
     dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn parse(raw: &str) -> Option<Entry> {
+        parse_desktop(raw, Path::new("/usr/share/applications/test.desktop"))
+    }
+
+    #[test]
+    fn parses_minimal_valid_entry() {
+        let entry = parse("[Desktop Entry]\nName=Firefox\nExec=firefox %u\n").unwrap();
+        assert_eq!(entry.name, "Firefox");
+        match entry.kind {
+            EntryKind::App { exec, terminal } => {
+                assert_eq!(exec, "firefox %u");
+                assert!(!terminal);
+            }
+            _ => panic!("expected App kind"),
+        }
+    }
+
+    #[test]
+    fn missing_name_is_rejected() {
+        assert!(parse("[Desktop Entry]\nExec=firefox\n").is_none());
+    }
+
+    #[test]
+    fn missing_exec_is_rejected() {
+        assert!(parse("[Desktop Entry]\nName=Firefox\n").is_none());
+    }
+
+    #[test]
+    fn no_display_entries_are_rejected() {
+        let raw = "[Desktop Entry]\nName=Hidden App\nExec=foo\nNoDisplay=true\n";
+        assert!(parse(raw).is_none());
+    }
+
+    #[test]
+    fn hidden_entries_are_rejected() {
+        let raw = "[Desktop Entry]\nName=Hidden App\nExec=foo\nHidden=true\n";
+        assert!(parse(raw).is_none());
+    }
+
+    #[test]
+    fn non_application_type_is_rejected() {
+        let raw = "[Desktop Entry]\nName=Some Link\nExec=foo\nType=Link\n";
+        assert!(parse(raw).is_none());
+    }
+
+    #[test]
+    fn terminal_flag_is_captured() {
+        let raw = "[Desktop Entry]\nName=Htop\nExec=htop\nTerminal=true\n";
+        let entry = parse(raw).unwrap();
+        match entry.kind {
+            EntryKind::App { terminal, .. } => assert!(terminal),
+            _ => panic!("expected App kind"),
+        }
+    }
+
+    #[test]
+    fn generic_name_is_preferred_as_description() {
+        let raw = "[Desktop Entry]\nName=Firefox\nGenericName=Web Browser\nExec=firefox\n";
+        let entry = parse(raw).unwrap();
+        assert_eq!(entry.description.as_deref(), Some("Web Browser"));
+    }
+
+    #[test]
+    fn description_falls_back_to_parent_dir_name_without_generic_name() {
+        let entry = parse_desktop(
+            "[Desktop Entry]\nName=Firefox\nExec=firefox\n",
+            Path::new("/usr/share/applications/firefox.desktop"),
+        )
+        .unwrap();
+        assert_eq!(entry.description.as_deref(), Some("applications"));
+    }
+
+    #[test]
+    fn icon_is_none_when_unset() {
+        let entry = parse("[Desktop Entry]\nName=Firefox\nExec=firefox\n").unwrap();
+        assert_eq!(entry.icon, None);
+    }
+
+    #[test]
+    fn icon_is_captured_when_set() {
+        let raw = "[Desktop Entry]\nName=Firefox\nExec=firefox\nIcon=firefox\n";
+        let entry = parse(raw).unwrap();
+        assert_eq!(entry.icon.as_deref(), Some("firefox"));
+    }
+
+    #[test]
+    fn first_occurrence_of_a_repeated_key_wins() {
+        let raw = "[Desktop Entry]\nName=First\nName=Second\nExec=foo\n";
+        let entry = parse(raw).unwrap();
+        assert_eq!(entry.name, "First");
+    }
+
+    #[test]
+    fn keys_outside_desktop_entry_section_are_ignored() {
+        let raw = "[Desktop Action New]\nName=Wrong\n[Desktop Entry]\nName=Right\nExec=foo\n";
+        let entry = parse(raw).unwrap();
+        assert_eq!(entry.name, "Right");
+    }
+
+    #[test]
+    fn comment_lines_are_ignored() {
+        let raw = "[Desktop Entry]\n# Name=Commented\nName=Real\nExec=foo\n";
+        let entry = parse(raw).unwrap();
+        assert_eq!(entry.name, "Real");
+    }
+
+    #[test]
+    fn strip_field_codes_removes_known_codes() {
+        assert_eq!(strip_field_codes("firefox %u"), "firefox");
+        assert_eq!(strip_field_codes("app %f %F %U %i %c %k"), "app");
+        assert_eq!(strip_field_codes("cmd %u --flag"), "cmd  --flag");
+    }
+
+    #[test]
+    fn strip_field_codes_collapses_escaped_percent() {
+        assert_eq!(strip_field_codes("echo 100%%"), "echo 100%");
+    }
+
+    #[test]
+    fn strip_field_codes_trims_result() {
+        assert_eq!(strip_field_codes("  firefox %u  "), "firefox");
+    }
+
+    fn write_desktop_file(dir: &Path, filename: &str, contents: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let mut f = std::fs::File::create(dir.join(filename)).unwrap();
+        f.write_all(contents.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn xdg_application_dirs_puts_home_local_share_first() {
+        let _guard = crate::test_env::lock();
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _home = unsafe { crate::test_env::EnvVarGuard::set("HOME", "/home/test-user") };
+        let _xdg = unsafe {
+            crate::test_env::EnvVarGuard::set("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+        };
+        let dirs = xdg_application_dirs();
+        assert_eq!(
+            dirs[0],
+            PathBuf::from("/home/test-user/.local/share/applications")
+        );
+        assert!(dirs.contains(&PathBuf::from("/usr/local/share/applications")));
+        assert!(dirs.contains(&PathBuf::from("/usr/share/applications")));
+    }
+
+    #[test]
+    fn scan_dedups_by_desktop_id_preferring_earlier_dir() {
+        let _guard = crate::test_env::lock();
+        let home_tmp = tempfile::tempdir().unwrap();
+        let sys_tmp = tempfile::tempdir().unwrap();
+
+        let home_apps = home_tmp.path().join(".local/share/applications");
+        write_desktop_file(
+            &home_apps,
+            "app.desktop",
+            "[Desktop Entry]\nName=Home Version\nExec=foo\n",
+        );
+
+        let sys_apps = sys_tmp.path().join("applications");
+        write_desktop_file(
+            &sys_apps,
+            "app.desktop",
+            "[Desktop Entry]\nName=System Version\nExec=foo\n",
+        );
+        // Second, non-conflicting app only present in the system dir.
+        write_desktop_file(
+            &sys_apps,
+            "other.desktop",
+            "[Desktop Entry]\nName=Other App\nExec=bar\n",
+        );
+
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _home =
+            unsafe { crate::test_env::EnvVarGuard::set("HOME", home_tmp.path().to_str().unwrap()) };
+        let _xdg = unsafe {
+            crate::test_env::EnvVarGuard::set("XDG_DATA_DIRS", sys_tmp.path().to_str().unwrap())
+        };
+
+        let mut out = Vec::new();
+        AppsPlugin::new(None).scan(&mut out);
+
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Home Version"));
+        assert!(!names.contains(&"System Version"));
+        assert!(names.contains(&"Other App"));
+    }
 }

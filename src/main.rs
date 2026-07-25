@@ -4,6 +4,8 @@ mod daemon;
 mod ipc;
 mod plugins;
 mod search;
+#[cfg(test)]
+mod test_env;
 mod ui;
 
 use clap::{Parser, Subcommand};

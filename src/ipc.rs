@@ -56,3 +56,59 @@ pub async fn send_command(cmd: Command) -> anyhow::Result<bool> {
     stream.read_exact(&mut resp).await?;
     Ok(resp[0] == RESP_OK)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_byte_roundtrip() {
+        for cmd in [Command::Show, Command::Hide, Command::Reload, Command::Kill] {
+            assert_eq!(Command::from_byte(cmd.to_byte()), Some(cmd));
+        }
+    }
+
+    #[test]
+    fn command_bytes_are_distinct() {
+        let bytes: std::collections::HashSet<u8> = [
+            Command::Show.to_byte(),
+            Command::Hide.to_byte(),
+            Command::Reload.to_byte(),
+            Command::Kill.to_byte(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(bytes.len(), 4);
+    }
+
+    #[test]
+    fn unknown_byte_does_not_decode() {
+        assert_eq!(Command::from_byte(0xff), None);
+        assert_eq!(Command::from_byte(0x99), None);
+    }
+
+    #[test]
+    fn socket_path_honors_xdg_runtime_dir_when_set() {
+        let _guard = crate::test_env::lock();
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _env = unsafe {
+            crate::test_env::EnvVarGuard::set("XDG_RUNTIME_DIR", "/tmp/slaunch-test-runtime")
+        };
+        assert_eq!(
+            socket_path(),
+            PathBuf::from("/tmp/slaunch-test-runtime/slaunch.sock")
+        );
+    }
+
+    #[test]
+    fn socket_path_falls_back_to_run_user_uid_when_unset() {
+        let _guard = crate::test_env::lock();
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _env = unsafe { crate::test_env::EnvVarGuard::remove("XDG_RUNTIME_DIR") };
+        let uid = unsafe { libc::getuid() };
+        assert_eq!(
+            socket_path(),
+            PathBuf::from(format!("/run/user/{uid}/slaunch.sock"))
+        );
+    }
+}
