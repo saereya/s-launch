@@ -139,25 +139,27 @@ fn fallback_config_dir() -> PathBuf {
 }
 
 pub fn load() -> Config {
-    let path = config_path();
-    if !path.exists() {
-        return Config::default();
-    }
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("Could not read config at {}: {e}", path.display());
-            return Config::default();
-        }
-    };
-    match toml::from_str(&raw) {
+    match try_load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("slaunch: config parse error in {}: {e}", path.display());
-            tracing::error!("Config parse error: {e}");
+            eprintln!("slaunch: {e}");
+            tracing::error!("{e}");
             Config::default()
         }
     }
+}
+
+/// Load config, reporting read/parse failures instead of silently defaulting.
+/// A missing config file is not an error (fresh install) — only a present but
+/// unreadable or malformed one is.
+pub fn try_load() -> Result<Config, String> {
+    let path = config_path();
+    if !path.exists() {
+        return Ok(Config::default());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read config at {}: {e}", path.display()))?;
+    toml::from_str(&raw).map_err(|e| format!("config parse error in {}: {e}", path.display()))
 }
 
 #[cfg(test)]

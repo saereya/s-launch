@@ -218,15 +218,24 @@ pub async fn run_socket(
                                     RESP_OK
                                 }
                                 Some(Command::Reload) => {
-                                    let new_cfg = config::load();
-                                    let new_entries = scan_entries(&new_cfg);
-                                    *state.config.write().await = new_cfg.clone();
-                                    *state.entries.write().await = new_entries.clone();
-                                    let _ = tx.send(DaemonEvent::ReloadConfig {
-                                        config: Box::new(new_cfg),
-                                        entries: new_entries,
-                                    }).await;
-                                    RESP_OK
+                                    match config::try_load() {
+                                        Ok(new_cfg) => {
+                                            let new_entries = scan_entries(&new_cfg);
+                                            *state.config.write().await = new_cfg.clone();
+                                            *state.entries.write().await = new_entries.clone();
+                                            let _ = tx.send(DaemonEvent::ReloadConfig {
+                                                config: Box::new(new_cfg),
+                                                entries: new_entries,
+                                            }).await;
+                                            RESP_OK
+                                        }
+                                        Err(e) => {
+                                            // Keep serving the last-good config/entries rather
+                                            // than silently falling back to defaults on a typo.
+                                            tracing::error!("Reload failed, keeping previous config: {e}");
+                                            RESP_ERR
+                                        }
+                                    }
                                 }
                                 Some(Command::Kill) => {
                                     let _ = tx.send(DaemonEvent::Quit).await;
