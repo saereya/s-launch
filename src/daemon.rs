@@ -13,6 +13,9 @@ use crate::plugins::commands::CommandsPlugin;
 use crate::plugins::power::PowerPlugin;
 use crate::plugins::{Entry, Plugin};
 
+/// How long a connected client has to send its one command byte.
+const IPC_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Messages the IPC listener sends into the Iced application.
 #[derive(Debug, Clone)]
 pub enum DaemonEvent {
@@ -155,17 +158,49 @@ pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config, ui_tx: mpsc::Sender<
 pub struct IpcServer {
     listener: UnixListener,
     socket_path: PathBuf,
+    /// Held open for the server's lifetime: closing the fd releases the flock.
+    _lock: std::fs::File,
     sigterm: tokio::signal::unix::Signal,
     sigint: tokio::signal::unix::Signal,
 }
 
+/// Take an exclusive lock proving we're the only daemon.
+///
+/// Probing the socket is not enough on its own: two daemons starting together
+/// can both find no live socket, both unlink it, and both bind — after which the
+/// loser holds a listener on an unlinked path that no client can ever reach, and
+/// reports no error at all. flock settles that atomically, and the kernel
+/// releases it on process exit so a crash can't leave it stuck.
+fn acquire_lock(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| anyhow::anyhow!("could not open lock file {}: {e}", path.display()))?;
+
+    // SAFETY: flock on a live fd we own. LOCK_NB fails rather than blocking.
+    let locked = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if !locked {
+        anyhow::bail!(
+            "another slaunch daemon is already running (lock held on {})",
+            path.display()
+        );
+    }
+    Ok(file)
+}
+
 /// Claim the IPC socket. Returns an error if another daemon owns it.
 pub async fn bind() -> anyhow::Result<IpcServer> {
+    let lock = acquire_lock(&ipc::lock_path())?;
     let socket_path = ipc::socket_path();
 
     if socket_path.exists() {
-        // Probe for a live daemon before clobbering the socket. If a connection
-        // succeeds another instance owns it; otherwise it's a stale file to clear.
+        // We hold the lock, so anything here is almost certainly stale — but a
+        // pre-lock daemon version wouldn't be holding it, so still probe before
+        // unlinking a socket that might have a live listener behind it.
         match tokio::net::UnixStream::connect(&socket_path).await {
             Ok(_) => anyhow::bail!(
                 "another slaunch daemon is already running ({})",
@@ -190,6 +225,7 @@ pub async fn bind() -> anyhow::Result<IpcServer> {
     Ok(IpcServer {
         listener,
         socket_path,
+        _lock: lock,
         sigterm: signal(SignalKind::terminate())?,
         sigint: signal(SignalKind::interrupt())?,
     })
@@ -201,6 +237,7 @@ pub async fn serve(server: IpcServer, state: Arc<DaemonState>, tx: mpsc::Sender<
     let IpcServer {
         listener,
         socket_path,
+        _lock,
         mut sigterm,
         mut sigint,
     } = server;
@@ -231,8 +268,21 @@ pub async fn serve(server: IpcServer, state: Arc<DaemonState>, tx: mpsc::Sender<
                         let tx = tx.clone();
                         tokio::spawn(async move {
                             let mut cmd_byte = [0u8; 1];
-                            if stream.read_exact(&mut cmd_byte).await.is_err() {
-                                return;
+                            // Bounded so a client that connects and never writes
+                            // can't park a task and an fd indefinitely; enough
+                            // of those would exhaust the daemon's descriptors.
+                            match tokio::time::timeout(
+                                IPC_READ_TIMEOUT,
+                                stream.read_exact(&mut cmd_byte),
+                            )
+                            .await
+                            {
+                                Ok(Ok(_)) => {}
+                                Ok(Err(_)) => return,
+                                Err(_) => {
+                                    tracing::warn!("IPC client sent no command, dropping");
+                                    return;
+                                }
                             }
 
                             let response = match Command::from_byte(cmd_byte[0]) {

@@ -56,10 +56,11 @@ impl Plugin for AppsPlugin {
     fn launch(&self, entry: &Entry) {
         if let EntryKind::App { exec, terminal } = &entry.kind {
             let cmd = strip_field_codes(exec);
+            let Some(argv) = parse_exec(&cmd) else { return };
             if *terminal {
-                launch_in_terminal(&cmd, self.terminal.as_deref());
+                launch_in_terminal(&argv, self.terminal.as_deref());
             } else {
-                launch_detached(&cmd);
+                launch_detached(&argv);
             }
         }
     }
@@ -135,10 +136,10 @@ fn strip_field_codes(exec: &str) -> String {
     let mut chars = exec.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '%' {
-            // Consume the following code character; `%%` collapses to one `%`.
-            match chars.next() {
-                Some('%') => out.push('%'),
-                _ => {} // drop the field code (or trailing lone `%`)
+            // Consume the following code character; `%%` collapses to one `%`,
+            // anything else (or a trailing lone `%`) is a field code we drop.
+            if let Some('%') = chars.next() {
+                out.push('%');
             }
         } else {
             out.push(c);
@@ -161,10 +162,9 @@ fn parse_exec(exec: &str) -> Option<Vec<String>> {
     }
 }
 
-fn launch_detached(exec: &str) {
-    let Some(args) = parse_exec(exec) else { return };
-    if let Err(e) = super::detached_command(&args[0]).args(&args[1..]).spawn() {
-        tracing::error!("Failed to launch '{exec}': {e}");
+fn launch_detached(argv: &[String]) {
+    if let Err(e) = super::detached_command(&argv[0]).args(&argv[1..]).spawn() {
+        tracing::error!("Failed to launch '{}': {e}", argv.join(" "));
     }
 }
 

@@ -34,13 +34,26 @@ pub(super) fn detached_command(program: &str) -> std::process::Command {
     cmd
 }
 
-pub(super) fn launch_in_terminal(cmd: &str, terminal: Option<&str>) {
-    if shell_words::split(cmd).map_or(true, |a| a.is_empty()) {
-        tracing::error!("Empty or unparseable exec string: '{cmd}'");
+/// Run `argv` inside a terminal emulator, keeping the terminal open afterwards.
+///
+/// Takes an already-split argv rather than a command string because the pieces
+/// have to be re-quoted for the shell we wrap them in: interpolating a raw
+/// string meant a path like `/opt/my apps/tool` ran as two words and failed with
+/// 127 — invisibly, since the child's stderr goes to /dev/null. Quoting also
+/// stops a filename on `$PATH` from being read as shell syntax.
+pub(super) fn launch_in_terminal(argv: &[String], terminal: Option<&str>) {
+    if argv.is_empty() {
+        tracing::error!("Refusing to launch an empty command in a terminal");
         return;
     }
+    let quoted = argv
+        .iter()
+        .map(|arg| shell_words::quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
     // Wrap in a shell so the terminal stays open after the command exits.
-    let shell_cmd = format!("{cmd}; exec $SHELL");
+    // $SHELL can be unset (e.g. under a bare systemd unit), hence the fallback.
+    let shell_cmd = format!("{quoted}; exec \"${{SHELL:-/bin/sh}}\"");
     let spawn = |term: &str| {
         detached_command(term)
             .args(["-e", "sh", "-c", &shell_cmd])

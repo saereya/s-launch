@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub window: WindowConfig,
@@ -59,17 +59,27 @@ pub struct PowerCommands {
     pub lock: String,
 }
 
-// ── Defaults ────────────────────────────────────────────────────────────────
+// ── Validation ──────────────────────────────────────────────────────────────
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            window: Default::default(),
-            input: Default::default(),
-            plugins: Default::default(),
-        }
+/// Upper bound for any pixel dimension. GTK takes these as `i32`, so an
+/// unclamped `u32`/`usize` from config can overflow into a negative size or
+/// panic the multiplication in the scroll-height calculation.
+const MAX_DIMENSION: u32 = 16_384;
+
+impl Config {
+    /// Clamp values that would otherwise produce a degenerate or overflowing
+    /// window. Config is user-edited text, so out-of-range numbers are a typo to
+    /// absorb, not a reason to refuse to start.
+    fn clamp_to_sane_ranges(&mut self) {
+        let w = &mut self.window;
+        w.width = w.width.clamp(120, MAX_DIMENSION);
+        w.max_results = w.max_results.clamp(1, 1000);
+        w.margin = w.margin.min(MAX_DIMENSION);
+        w.item_height = w.item_height.max(1);
     }
 }
+
+// ── Defaults ────────────────────────────────────────────────────────────────
 
 impl Default for WindowConfig {
     fn default() -> Self {
@@ -159,7 +169,10 @@ pub fn try_load() -> Result<Config, String> {
     }
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| format!("could not read config at {}: {e}", path.display()))?;
-    toml::from_str(&raw).map_err(|e| format!("config parse error in {}: {e}", path.display()))
+    let mut cfg: Config = toml::from_str(&raw)
+        .map_err(|e| format!("config parse error in {}: {e}", path.display()))?;
+    cfg.clamp_to_sane_ranges();
+    Ok(cfg)
 }
 
 #[cfg(test)]
@@ -274,6 +287,50 @@ mod tests {
             width = "not a number"
         "#;
         assert!(toml::from_str::<Config>(raw).is_err());
+    }
+
+    #[test]
+    fn out_of_range_dimensions_are_clamped_not_rejected() {
+        // These would overflow the i32 GTK dimensions (max_results * item_height
+        // panics in debug, wraps in release; a u32 width goes negative).
+        // i64::MAX is the ceiling TOML itself can represent — anything larger is
+        // already rejected by the parser.
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [window]
+            width = 4294967295
+            max_results = 9223372036854775807
+            margin = 4294967295
+            item_height = 0
+        "#,
+        )
+        .expect("out-of-range values still parse");
+        cfg.clamp_to_sane_ranges();
+        assert_eq!(cfg.window.width, 16_384);
+        assert_eq!(cfg.window.max_results, 1000);
+        assert_eq!(cfg.window.margin, 16_384);
+        assert_eq!(cfg.window.item_height, 1);
+        // The product that feeds ScrolledWindow::max_content_height must fit i32.
+        assert!(i32::try_from(cfg.window.max_results * cfg.window.item_height as usize).is_ok());
+    }
+
+    #[test]
+    fn zero_max_results_is_clamped_to_one() {
+        let mut cfg = Config::default();
+        cfg.window.max_results = 0;
+        cfg.clamp_to_sane_ranges();
+        assert_eq!(cfg.window.max_results, 1);
+    }
+
+    #[test]
+    fn in_range_values_are_left_alone() {
+        let mut cfg = Config::default();
+        let before = cfg.clone();
+        cfg.clamp_to_sane_ranges();
+        assert_eq!(cfg.window.width, before.window.width);
+        assert_eq!(cfg.window.max_results, before.window.max_results);
+        assert_eq!(cfg.window.margin, before.window.margin);
+        assert_eq!(cfg.window.item_height, before.window.item_height);
     }
 
     #[test]

@@ -76,12 +76,13 @@ fn run_daemon() -> anyhow::Result<()> {
     // Scan entries synchronously before starting the event loop so the
     // first Show is instant.
     let entries = daemon::scan_entries(&cfg);
-    let state = Arc::new(daemon::DaemonState::new(cfg));
+    let state = Arc::new(daemon::DaemonState::new(cfg.clone()));
     {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build tokio runtime: {e}"))?;
         let state_ref = state.clone();
+        let entries = entries.clone();
         rt.block_on(async move {
             *state_ref.entries.write().await = entries;
         });
@@ -127,7 +128,16 @@ fn run_daemon() -> anyhow::Result<()> {
     }
 
     // GTK must run on the main thread (required by most Wayland compositors).
-    ui::run(state, rx)
+    // Config and entries go in directly rather than being read back out of
+    // DaemonState, which could be write-locked by a reload racing startup.
+    let result = ui::run(cfg, entries, rx);
+
+    // ui::run returns once the GTK loop ends, which is the one point every
+    // normal exit passes through — including `slaunch kill`, where the process
+    // tears down before the IPC thread can run its own cleanup and would
+    // otherwise always leave the socket file behind.
+    let _ = std::fs::remove_file(ipc::socket_path());
+    result
 }
 
 // ── Client entry point ────────────────────────────────────────────────────────

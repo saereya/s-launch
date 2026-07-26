@@ -39,13 +39,24 @@ impl Command {
     }
 }
 
-pub fn socket_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
+fn runtime_dir() -> PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
         // SAFETY: getuid is always successful and has no preconditions.
         let uid = unsafe { libc::getuid() };
         format!("/run/user/{uid}")
     });
-    PathBuf::from(runtime_dir).join("slaunch.sock")
+    PathBuf::from(dir)
+}
+
+pub fn socket_path() -> PathBuf {
+    runtime_dir().join("slaunch.sock")
+}
+
+/// Path of the daemon's single-instance lock. Separate from the socket because
+/// the socket file's *existence* says nothing about whether a daemon is live,
+/// whereas an flock is held by the kernel and released on process exit.
+pub fn lock_path() -> PathBuf {
+    runtime_dir().join("slaunch.lock")
 }
 
 pub async fn send_command(cmd: Command) -> anyhow::Result<bool> {
@@ -110,5 +121,19 @@ mod tests {
             socket_path(),
             PathBuf::from(format!("/run/user/{uid}/slaunch.sock"))
         );
+    }
+
+    #[test]
+    fn lock_path_sits_beside_the_socket() {
+        let _guard = crate::test_env::lock();
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _env = unsafe {
+            crate::test_env::EnvVarGuard::set("XDG_RUNTIME_DIR", "/tmp/slaunch-test-runtime")
+        };
+        assert_eq!(
+            lock_path(),
+            PathBuf::from("/tmp/slaunch-test-runtime/slaunch.lock")
+        );
+        assert_eq!(lock_path().parent(), socket_path().parent());
     }
 }

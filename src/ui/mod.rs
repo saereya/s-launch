@@ -12,7 +12,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokio::sync::mpsc;
 
 use crate::config::Config;
-use crate::daemon::{DaemonEvent, DaemonState};
+use crate::daemon::DaemonEvent;
 use crate::plugins::{
     apps::AppsPlugin, commands::CommandsPlugin, emoji::EmojiPlugin, math::MathPlugin,
     power::PowerPlugin, Entry as AppEntry, EntryKind, Plugin,
@@ -86,6 +86,20 @@ impl UiState {
         true
     }
 
+    /// Recompute after the *entry list* changed under us (rescan or reload).
+    /// The matcher was rebuilt, so the pattern has to be re-applied.
+    ///
+    /// Returns whether anything actually moved: a rescan that finds the same
+    /// entries — the common case, since any write to a `$PATH` directory
+    /// triggers one — must not rebuild the list while the window is open.
+    fn refresh_after_entry_change(&mut self) -> bool {
+        if self.query.starts_with('=') || self.query.starts_with(':') {
+            return false;
+        }
+        self.searcher.update_pattern(&self.query);
+        self.resync_results()
+    }
+
     fn matcher_results(&mut self) -> Vec<AppEntry> {
         self.searcher
             .results(self.config.window.max_results)
@@ -127,6 +141,61 @@ impl UiState {
     }
 }
 
+// ── Config-driven widget geometry ─────────────────────────────────────────────
+
+/// The widgets whose appearance comes from `[window]`/`[input]` config.
+///
+/// Grouped so `apply_config` can run on reload as well as at build time.
+/// Previously all of this was set inline while constructing the window, so
+/// `slaunch reload` silently ignored every one of these settings — only
+/// `max_results`, `terminal` and the plugin toggles actually took effect,
+/// despite the docs promising config applies live.
+struct Widgets {
+    window: ApplicationWindow,
+    content: GtkBox,
+    scroll: ScrolledWindow,
+    search_entry: Entry,
+}
+
+impl Widgets {
+    fn apply_config(&self, config: &Config) {
+        let w = &config.window;
+
+        self.window.set_default_width(w.width as i32);
+
+        // Anchors are set explicitly in every branch: reload can move the window
+        // between positions, so "center" has to actively clear the edges rather
+        // than rely on them never having been set.
+        let (top, bottom) = match w.anchor.as_str() {
+            "bottom" => (false, true),
+            "center" => (false, false),
+            _ => (true, false), // "top" (default)
+        };
+        self.window.set_anchor(Edge::Top, top);
+        self.window.set_anchor(Edge::Bottom, bottom);
+        if top {
+            self.window.set_margin(Edge::Top, w.margin as i32);
+        }
+        if bottom {
+            self.window.set_margin(Edge::Bottom, w.margin as i32);
+        }
+
+        let p = w.padding as i32;
+        self.content.set_spacing(p);
+        self.content.set_margin_start(p);
+        self.content.set_margin_end(p);
+        self.content.set_margin_top(p);
+        self.content.set_margin_bottom(p);
+
+        // Config clamping keeps this product inside i32.
+        self.scroll
+            .set_max_content_height((w.max_results * w.item_height as usize) as i32);
+
+        self.search_entry
+            .set_placeholder_text(Some(config.input.placeholder.as_str()));
+    }
+}
+
 // ── Scroll helper ─────────────────────────────────────────────────────────────
 
 fn scroll_to_row(scroll: &ScrolledWindow, row: &ListBoxRow) {
@@ -151,10 +220,7 @@ fn scroll_to_row(scroll: &ScrolledWindow, row: &ListBoxRow) {
 // ── List helpers ──────────────────────────────────────────────────────────────
 
 fn rebuild_list(list: &ListBox, state: &UiState) {
-    // Compatible with all GTK4 versions (remove_all needs 4.12)
-    while let Some(row) = list.row_at_index(0) {
-        list.remove(&row);
-    }
+    list.remove_all();
 
     for entry in &state.results {
         let hbox = GtkBox::new(Orientation::Horizontal, 8);
@@ -213,8 +279,22 @@ fn rebuild_list(list: &ListBox, state: &UiState) {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
+/// Everything `build_ui` needs, handed over once when GTK activates.
+///
+/// Config and entries are passed in rather than read back out of `DaemonState`:
+/// `build_ui` used to `try_read()` both and fall back to `Config::default()` plus
+/// an empty list on failure, which meant a reload or a rescan holding the write
+/// lock during startup produced an unstyled, empty launcher that only recovered
+/// on the next reload. `run_daemon` already owns both values.
+struct Startup {
+    events: async_channel::Receiver<DaemonEvent>,
+    config: Config,
+    entries: Vec<AppEntry>,
+}
+
 pub fn run(
-    daemon_state: Arc<DaemonState>,
+    config: Config,
+    entries: Vec<AppEntry>,
     ipc_rx: mpsc::Receiver<DaemonEvent>,
 ) -> anyhow::Result<()> {
     gtk4::init().map_err(|e| anyhow::anyhow!("GTK init: {e}"))?;
@@ -269,16 +349,17 @@ pub fn run(
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
-    // Cell lets us take the receiver exactly once inside the activate closure
-    // without needing Rc (connect_activate doesn't require Send).
-    let receiver = Cell::new(Some(receiver));
+    // Cell lets us take the startup payload exactly once inside the activate
+    // closure without needing Rc (connect_activate doesn't require Send).
+    let startup = Cell::new(Some(Startup {
+        events: receiver,
+        config,
+        entries,
+    }));
 
-    app.connect_activate({
-        let daemon_state = daemon_state.clone();
-        move |app| {
-            if let Some(rx) = receiver.take() {
-                build_ui(app, rx, daemon_state.clone());
-            }
+    app.connect_activate(move |app| {
+        if let Some(startup) = startup.take() {
+            build_ui(app, startup);
         }
     });
 
@@ -288,22 +369,12 @@ pub fn run(
 
 // ── UI construction ───────────────────────────────────────────────────────────
 
-fn build_ui(
-    app: &Application,
-    rx: async_channel::Receiver<DaemonEvent>,
-    daemon_state: Arc<DaemonState>,
-) {
-    // try_read() is non-blocking; by the time activate fires, no writer is active.
-    let config = daemon_state
-        .config
-        .try_read()
-        .map(|g| g.clone())
-        .unwrap_or_default();
-    let entries = daemon_state
-        .entries
-        .try_read()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+fn build_ui(app: &Application, startup: Startup) {
+    let Startup {
+        events: rx,
+        config,
+        entries,
+    } = startup;
     let app = app.clone();
 
     // CSS at highest priority — fully overrides the system theme for our window.
@@ -320,10 +391,7 @@ fn build_ui(
     );
 
     // Window
-    let window = ApplicationWindow::builder()
-        .application(&app)
-        .default_width(config.window.width as i32)
-        .build();
+    let window = ApplicationWindow::builder().application(&app).build();
     window.add_css_class("slaunch");
     window.set_decorated(false);
 
@@ -334,55 +402,38 @@ fn build_ui(
     window.set_namespace("slaunch");
     window.set_exclusive_zone(-1);
 
-    match config.window.anchor.as_str() {
-        "bottom" => {
-            window.set_anchor(Edge::Bottom, true);
-            window.set_anchor(Edge::Top, false);
-            window.set_margin(Edge::Bottom, config.window.margin as i32);
-        }
-        "center" => {} // no anchors → compositor centres the window
-        _ => {
-            // "top" (default)
-            window.set_anchor(Edge::Top, true);
-            window.set_anchor(Edge::Bottom, false);
-            window.set_margin(Edge::Top, config.window.margin as i32);
-        }
-    }
-
     // Widgets
-    let search_entry = Entry::builder()
-        .placeholder_text(&config.input.placeholder)
-        .hexpand(true)
-        .build();
+    let search_entry = Entry::builder().hexpand(true).build();
 
     let list = ListBox::new();
     list.set_selection_mode(gtk4::SelectionMode::Single);
 
-    let max_list_height = (config.window.max_results * config.window.item_height as usize) as i32;
     let scroll = ScrolledWindow::builder()
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .propagate_natural_height(true)
-        .max_content_height(max_list_height)
         .build();
     scroll.set_child(Some(&list));
 
-    let p = config.window.padding as i32;
-    let content = GtkBox::new(Orientation::Vertical, p);
-    content.set_margin_start(p);
-    content.set_margin_end(p);
-    content.set_margin_top(p);
-    content.set_margin_bottom(p);
+    let content = GtkBox::new(Orientation::Vertical, 0);
     content.append(&search_entry);
     content.append(&scroll);
     window.set_child(Some(&content));
+
+    let widgets = Widgets {
+        window: window.clone(),
+        content: content.clone(),
+        scroll: scroll.clone(),
+        search_entry: search_entry.clone(),
+    };
+    widgets.apply_config(&config);
 
     // Initial search state. The matcher runs on background threads and signals
     // completion through `notify`; this channel relays that onto the glib main
     // loop, where the list can actually be rebuilt. Capacity 1 with try_send
     // coalesces bursts — one pending wake-up is all we need.
     let (redraw_tx, redraw_rx) = async_channel::bounded::<()>(1);
-    let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
+    let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let _ = redraw_tx.try_send(());
     });
 
@@ -434,9 +485,13 @@ fn build_ui(
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
             use gtk4::gdk::Key as K;
 
+            // Hide before clearing, in both of these: set_text("") fires
+            // connect_changed, which re-runs the query and rebuilds the list, so
+            // clearing first left the window on screen for the duration of that
+            // work rather than disappearing immediately.
             if key == K::Escape {
-                entry_ref.set_text(""); // fires connect_changed → clears query + list
                 window_ref.set_visible(false);
+                entry_ref.set_text(""); // fires connect_changed → clears query + list
                 return glib::Propagation::Stop;
             }
 
@@ -445,8 +500,8 @@ fn build_ui(
                     let s = state.borrow();
                     s.launch_at(s.selected);
                 }
-                entry_ref.set_text(""); // fires connect_changed
                 window_ref.set_visible(false);
+                entry_ref.set_text(""); // fires connect_changed
                 return glib::Propagation::Stop;
             }
 
@@ -498,8 +553,8 @@ fn build_ui(
                 let s = state.borrow();
                 s.launch_at(row.index() as usize);
             }
-            entry_ref.set_text(""); // fires connect_changed
             window_ref.set_visible(false);
+            entry_ref.set_text(""); // fires connect_changed
         });
     }
 
@@ -514,8 +569,8 @@ fn build_ui(
     {
         let entry_ref = search_entry.clone();
         window.connect_close_request(move |win| {
-            entry_ref.set_text(""); // fires connect_changed → clears query + list
             win.set_visible(false);
+            entry_ref.set_text(""); // fires connect_changed → clears query + list
             glib::Propagation::Stop
         });
     }
@@ -554,8 +609,8 @@ fn build_ui(
                         entry_ref.grab_focus();
                     }
                     DaemonEvent::Hide => {
-                        entry_ref.set_text(""); // fires connect_changed
                         window_ref.set_visible(false);
+                        entry_ref.set_text(""); // fires connect_changed
                     }
                     DaemonEvent::ReloadConfig {
                         config: new_cfg,
@@ -568,16 +623,26 @@ fn build_ui(
                             s.config = *new_cfg;
                             s.refresh_results();
                         }
+                        // Re-apply geometry and placeholder, not just the CSS:
+                        // window config used to be frozen at build time.
+                        widgets.apply_config(&state.borrow().config);
                         provider.load_from_string(&new_css);
                         rebuild_list(&list, &state.borrow());
                     }
                     DaemonEvent::EntriesUpdated(entries) => {
-                        {
+                        // A rescan fires on any write to a watched directory, so
+                        // it usually finds nothing new. Only touch the list when
+                        // the visible results actually changed — rebuilding it
+                        // unconditionally reset the selection under a user who
+                        // was mid-navigation in an open window.
+                        let changed = {
                             let mut s = state.borrow_mut();
                             s.searcher.reload(entries);
-                            s.refresh_results();
+                            s.refresh_after_entry_change()
+                        };
+                        if changed {
+                            rebuild_list(&list, &state.borrow());
                         }
-                        rebuild_list(&list, &state.borrow());
                     }
                     DaemonEvent::Quit => {
                         app.quit();

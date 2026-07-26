@@ -1,4 +1,34 @@
+use std::sync::OnceLock;
+
 use super::{Entry, EntryKind, Plugin};
+
+/// One searchable emoji: the emoji itself plus case-folded name and shortcode.
+struct IndexedEmoji {
+    emoji: &'static emojis::Emoji,
+    name_lower: String,
+    shortcode_lower: String,
+}
+
+/// Case-folded emoji index, built once on first use.
+///
+/// The bundled Unicode names are mixed-case — 770 of them contain capitals,
+/// including every country flag ("flag: Germany"), the zodiac signs and things
+/// like "ATM sign". Matching a lowercased query against the raw name therefore
+/// missed all of them, and the shortcodes don't cover the gap (flags use ISO
+/// codes like `de`, so `:germany` found nothing). Fold both sides, once, rather
+/// than allocating ~1900 lowercased strings on every keystroke.
+fn index() -> &'static [IndexedEmoji] {
+    static INDEX: OnceLock<Vec<IndexedEmoji>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        emojis::iter()
+            .map(|emoji| IndexedEmoji {
+                emoji,
+                name_lower: emoji.name().to_lowercase(),
+                shortcode_lower: emoji.shortcode().unwrap_or("").to_lowercase(),
+            })
+            .collect()
+    })
+}
 
 pub struct EmojiPlugin;
 
@@ -15,25 +45,25 @@ impl Plugin for EmojiPlugin {
             return;
         }
 
-        for emoji in emojis::iter() {
-            let name = emoji.name();
-            let shortcode = emoji.shortcode().unwrap_or("");
-            if !name.contains(search.as_str()) && !shortcode.contains(search.as_str()) {
+        for indexed in index() {
+            if !indexed.name_lower.contains(search.as_str())
+                && !indexed.shortcode_lower.contains(search.as_str())
+            {
                 continue;
             }
 
-            let description = if shortcode.is_empty() {
+            let description = if indexed.shortcode_lower.is_empty() {
                 None
             } else {
-                Some(format!(":{shortcode}:"))
+                Some(format!(":{}:", indexed.shortcode_lower))
             };
 
             out.push(Entry {
-                name: format!("{} {name}", emoji.as_str()),
+                name: format!("{} {}", indexed.emoji.as_str(), indexed.emoji.name()),
                 description,
                 icon: None,
                 kind: EntryKind::EmojiResult {
-                    emoji: emoji.as_str().to_string(),
+                    emoji: indexed.emoji.as_str().to_string(),
                 },
                 priority: 0,
             });
@@ -87,6 +117,27 @@ mod tests {
         let upper = query(":GRINNING");
         assert_eq!(lower.len(), upper.len());
         assert!(!lower.is_empty());
+    }
+
+    #[test]
+    fn matches_names_that_contain_capitals() {
+        // Regression: the query was lowercased but the Unicode name was not, so
+        // every mixed-case name was unreachable. Country flags are the worst
+        // case — their shortcodes are ISO codes, so there was no other way in.
+        for term in [":germany", ":Germany", ":united kingdom", ":aries", ":atm"] {
+            assert!(
+                !query(term).is_empty(),
+                "'{term}' should match at least one emoji"
+            );
+        }
+    }
+
+    #[test]
+    fn capitalised_name_matches_regardless_of_query_case() {
+        let lower = query(":germany");
+        let mixed = query(":GeRmAnY");
+        assert_eq!(lower.len(), mixed.len());
+        assert!(lower.iter().any(|e| e.name.contains("Germany")));
     }
 
     #[test]

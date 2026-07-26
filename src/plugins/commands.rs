@@ -54,7 +54,11 @@ impl Plugin for CommandsPlugin {
 
     fn launch(&self, entry: &Entry) {
         if let EntryKind::Command { path } = &entry.kind {
-            launch_in_terminal(path.to_str().unwrap_or_default(), self.terminal.as_deref());
+            // Single-element argv: the path is the whole command, and gets quoted
+            // for the wrapping shell. to_string_lossy rather than to_str, which
+            // used to silently launch "" for a non-UTF-8 path.
+            let argv = vec![path.to_string_lossy().into_owned()];
+            launch_in_terminal(&argv, self.terminal.as_deref());
         }
     }
 }
