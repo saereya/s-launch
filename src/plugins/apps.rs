@@ -109,14 +109,26 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
         return None;
     }
 
-    let description = match localized(&fields, "GenericName") {
-        Some(generic) if !generic.is_empty() => Some(generic.to_string()),
-        _ => path
+    let generic_name = localized(&fields, "GenericName").filter(|g| !g.is_empty());
+    let description = match generic_name {
+        Some(generic) => Some(generic.to_string()),
+        None => path
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_string()),
     };
+
+    // `Keywords=` exists precisely so launchers can match on terms that aren't
+    // in the name ("Keywords=web;browser;internet"), and was previously ignored.
+    // GenericName joins it so "browser" finds Firefox even without Keywords.
+    let mut searchable: Vec<&str> = Vec::new();
+    if let Some(keywords) = localized(&fields, "Keywords") {
+        searchable.extend(keywords.split(';').map(str::trim).filter(|k| !k.is_empty()));
+    }
+    if let Some(generic) = generic_name {
+        searchable.push(generic);
+    }
 
     Some(Entry {
         name: name.to_string(),
@@ -130,6 +142,7 @@ fn parse_desktop(raw: &str, path: &Path) -> Option<Entry> {
             terminal: is_true(fields.get("Terminal")),
         },
         priority: 0,
+        keywords: (!searchable.is_empty()).then(|| searchable.join(" ")),
     })
 }
 
@@ -374,6 +387,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(entry.description.as_deref(), Some("applications"));
+    }
+
+    #[test]
+    fn desktop_keywords_become_searchable_without_being_displayed() {
+        let raw = "[Desktop Entry]\nName=Firefox\nExec=firefox\nKeywords=web;browser;internet;\n";
+        let entry = parse(raw).unwrap();
+        let keywords = entry.keywords.as_deref().unwrap();
+        assert!(keywords.contains("browser"));
+        assert!(keywords.contains("internet"));
+        // Displayed fields stay clean.
+        assert_eq!(entry.name, "Firefox");
+        assert!(!entry
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .contains("browser"));
+        assert_eq!(entry.search_text().as_ref(), "Firefox web browser internet");
+    }
+
+    #[test]
+    fn generic_name_is_searchable_as_well_as_shown() {
+        let raw = "[Desktop Entry]\nName=Firefox\nGenericName=Web Browser\nExec=firefox\n";
+        let entry = parse(raw).unwrap();
+        assert_eq!(entry.description.as_deref(), Some("Web Browser"));
+        assert!(entry.search_text().contains("Web Browser"));
+    }
+
+    #[test]
+    fn keywords_are_absent_when_the_file_has_neither_key() {
+        let entry = parse("[Desktop Entry]\nName=Firefox\nExec=firefox\n").unwrap();
+        assert_eq!(entry.keywords, None);
+    }
+
+    #[test]
+    fn localised_keywords_are_preferred() {
+        let raw =
+            "[Desktop Entry]\nName=Files\nExec=files\nKeywords=folder;\nKeywords[de]=Ordner;\n";
+        let _guard = crate::test_env::lock();
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _lc_all = unsafe { crate::test_env::EnvVarGuard::remove("LC_ALL") };
+        let _lc_messages = unsafe { crate::test_env::EnvVarGuard::remove("LC_MESSAGES") };
+        let _lang = unsafe { crate::test_env::EnvVarGuard::set("LANG", "de_DE.UTF-8") };
+        assert_eq!(parse(raw).unwrap().keywords.as_deref(), Some("Ordner"));
     }
 
     #[test]

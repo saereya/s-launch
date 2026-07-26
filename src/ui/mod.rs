@@ -73,6 +73,7 @@ fn confirm_row(entry: &AppEntry) -> AppEntry {
         icon: entry.icon.clone(),
         kind: entry.kind.clone(),
         priority: 0,
+        keywords: None,
     }
 }
 
@@ -827,6 +828,7 @@ mod tests {
                 command: "systemctl poweroff".into(),
             },
             priority: 2,
+            keywords: None,
         }
     }
 
@@ -840,6 +842,7 @@ mod tests {
                 terminal: false,
             },
             priority: 0,
+            keywords: None,
         }
     }
 

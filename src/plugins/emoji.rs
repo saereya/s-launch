@@ -76,6 +76,7 @@ impl Plugin for EmojiPlugin {
                     emoji: indexed.emoji.as_str().to_string(),
                 },
                 priority: 0,
+                keywords: None, // prefix-triggered, never goes through the matcher
             });
         }
     }

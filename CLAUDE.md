@@ -71,7 +71,9 @@ Implication: adding a new `scan`-based plugin means implementing `Plugin` + regi
 
 ### Search (`src/search.rs`)
 
-`Searcher` wraps a `nucleo::Nucleo<usize>` (SIMD fuzzy matcher) indexed over entry positions, not entries directly (avoids cloning the whole list into the matcher). `results(limit)` does a priority-aware fill: it buckets matches by `Entry::priority` (set from `plugins.priority`'s index during `scan_entries`) and fills the result list from the highest-priority bucket first, so a low-priority plugin's high fuzzy score can't crowd out a higher-priority plugin's results. Nucleo's own ranking only determines order *within* a bucket.
+`Searcher` wraps a `nucleo::Nucleo<usize>` (SIMD fuzzy matcher) indexed over entry positions, not entries directly (avoids cloning the whole list into the matcher). The indexed haystack is `Entry::search_text()` — the display name plus `Entry::keywords`, which is how an app is findable by its `.desktop` `Keywords=`/`GenericName` without those terms showing in the row. `keywords` is deliberately *not* `description`: for commands the description is the `$PATH` directory, so indexing it would make every one of ~2300 command entries match "usr" or "bin".
+
+**Matching is asynchronous.** `tick()` returns a `Status` whose `running` flag means the worker threads haven't finished, so `results()` can legitimately return a *partial* set. The `notify` callback passed to `Searcher::new` is the only signal that more has arrived; `ui::build_ui` relays it onto the glib main loop, which calls `UiState::resync_results`. Any new call path that reads `results()` and renders it must either be reachable from that relay or accept showing stale results — dropping the callback silently reintroduces truncated result lists. `results(limit)` does a priority-aware fill: it buckets matches by `Entry::priority` (set from `plugins.priority`'s index during `scan_entries`) and fills the result list from the highest-priority bucket first, so a low-priority plugin's high fuzzy score can't crowd out a higher-priority plugin's results. Nucleo's own ranking only determines order *within* a bucket.
 
 ### Config (`src/config.rs`)
 

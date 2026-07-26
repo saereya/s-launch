@@ -175,6 +175,26 @@ pub struct Entry {
     pub kind: EntryKind,
     /// Lower value = higher priority in results; set by scan_entries from config
     pub priority: u8,
+    /// Extra text the fuzzy matcher should search but the row shouldn't show —
+    /// a `.desktop` file's `Keywords=` and `GenericName`, for instance, so
+    /// "browser" finds Firefox.
+    ///
+    /// Deliberately separate from `description`: for commands that's the `$PATH`
+    /// directory, and indexing it would make every one of ~2300 entries match
+    /// "usr" or "bin".
+    pub keywords: Option<String>,
+}
+
+impl Entry {
+    /// The haystack the fuzzy matcher indexes for this entry.
+    pub fn search_text(&self) -> std::borrow::Cow<'_, str> {
+        match &self.keywords {
+            Some(extra) if !extra.is_empty() => {
+                std::borrow::Cow::Owned(format!("{} {extra}", self.name))
+            }
+            _ => std::borrow::Cow::Borrowed(&self.name),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

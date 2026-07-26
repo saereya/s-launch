@@ -32,6 +32,7 @@ impl Plugin for MathPlugin {
                 icon: Some("accessories-calculator".to_string()),
                 kind: EntryKind::MathResult { value: display },
                 priority: 0,
+                keywords: None, // prefix-triggered, never goes through the matcher
             });
         }
     }

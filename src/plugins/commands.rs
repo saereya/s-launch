@@ -57,6 +57,7 @@ impl Plugin for CommandsPlugin {
                         icon: None,
                         kind: EntryKind::Command { path: path.clone() },
                         priority: 0,
+                        keywords: None,
                     });
                 }
             }

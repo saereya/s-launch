@@ -17,14 +17,36 @@ impl Plugin for PowerPlugin {
     }
 
     fn scan(&self, out: &mut Vec<Entry>) {
-        let actions: [(&str, &str, &str); 4] = [
-            ("Shutdown", "system-shutdown", &self.commands.shutdown),
-            ("Reboot", "system-reboot", &self.commands.reboot),
-            ("Suspend", "system-suspend", &self.commands.suspend),
-            ("Lock Screen", "system-lock-screen", &self.commands.lock),
+        // The extra terms are what people actually type: "poweroff" and "halt"
+        // for Shutdown, "restart" for Reboot, "sleep" for Suspend.
+        let actions: [(&str, &str, &str, &str); 4] = [
+            (
+                "Shutdown",
+                "system-shutdown",
+                &self.commands.shutdown,
+                "poweroff halt power off",
+            ),
+            (
+                "Reboot",
+                "system-reboot",
+                &self.commands.reboot,
+                "restart reset",
+            ),
+            (
+                "Suspend",
+                "system-suspend",
+                &self.commands.suspend,
+                "sleep standby",
+            ),
+            (
+                "Lock Screen",
+                "system-lock-screen",
+                &self.commands.lock,
+                "lock session screensaver",
+            ),
         ];
 
-        for (name, icon, command) in actions {
+        for (name, icon, command, keywords) in actions {
             if command.trim().is_empty() {
                 continue;
             }
@@ -36,6 +58,8 @@ impl Plugin for PowerPlugin {
                     command: command.to_string(),
                 },
                 priority: 0,
+                // So "poweroff"/"logout"-style words reach the matching action.
+                keywords: Some(keywords.to_string()),
             });
         }
     }

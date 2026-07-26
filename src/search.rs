@@ -33,14 +33,16 @@ impl Searcher {
             Config::DEFAULT,
             notify.clone(),
             None, // use default thread count
-            1,    // one column: the display name
+            1,    // one column: Entry::search_text (name + keywords)
         );
 
         {
             let injector = nucleo.injector();
             for (i, _entry) in entries.iter().enumerate() {
                 injector.push(i, |idx, cols| {
-                    cols[0] = entries[*idx].name.as_str().into();
+                    // Name plus the plugin's keywords, so an app can be found by
+                    // its GenericName or .desktop Keywords as well as its name.
+                    cols[0] = entries[*idx].search_text().as_ref().into();
                 });
             }
         }
@@ -154,6 +156,14 @@ mod tests {
             icon: None,
             kind: EntryKind::Command { path: name.into() },
             priority,
+            keywords: None,
+        }
+    }
+
+    fn entry_with_keywords(name: &str, keywords: &str) -> Entry {
+        Entry {
+            keywords: Some(keywords.to_string()),
+            ..entry(name, 0)
         }
     }
 
@@ -236,6 +246,52 @@ mod tests {
         let names: Vec<&str> = results.iter().map(|m| m.entry.name.as_str()).collect();
         assert_eq!(&names[..2], &["app-one", "app-two"]);
         assert_eq!(names[2], "cmd-one");
+    }
+
+    #[test]
+    fn keywords_are_searchable_without_appearing_in_the_name() {
+        let entries = vec![
+            entry_with_keywords("Firefox", "web browser internet"),
+            entry("Calculator", 0),
+        ];
+        let results = search(entries, "browser", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entry.name, "Firefox");
+        // The keyword text must not leak into what the row displays.
+        assert!(!results[0].entry.name.contains("browser"));
+    }
+
+    #[test]
+    fn a_name_match_still_outranks_a_keyword_match() {
+        let entries = vec![
+            entry_with_keywords("Thunderbird", "mail client"),
+            entry("Mail", 0),
+        ];
+        let results = search(entries, "mail", 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].entry.name, "Mail",
+            "the entry whose name matches should rank first"
+        );
+    }
+
+    #[test]
+    fn entries_without_keywords_match_exactly_as_before() {
+        let entries = vec![entry("firefox", 0), entry("alacritty", 0)];
+        let results = search(entries, "ffx", 10);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entry.name, "firefox");
+    }
+
+    #[test]
+    fn search_text_is_the_name_alone_when_there_are_no_keywords() {
+        assert_eq!(entry("htop", 0).search_text().as_ref(), "htop");
+        assert_eq!(
+            entry_with_keywords("htop", "monitor")
+                .search_text()
+                .as_ref(),
+            "htop monitor"
+        );
     }
 
     #[test]
