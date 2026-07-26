@@ -30,6 +30,10 @@ pub enum DaemonEvent {
 }
 
 /// State shared between the socket listener and the UI.
+///
+/// `entries` is not the UI's copy — the UI owns its own via `Searcher`. This one
+/// is the baseline the watcher diffs each rescan against, so an unchanged rescan
+/// can be dropped before it reaches the UI.
 pub struct DaemonState {
     pub config: RwLock<Config>,
     pub entries: RwLock<Vec<Entry>>,
@@ -138,7 +142,19 @@ pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config, ui_tx: mpsc::Sender<
             let cfg = state.config.read().await.clone();
             match tokio::task::spawn_blocking(move || scan_entries(&cfg)).await {
                 Ok(entries) => {
-                    *state.entries.write().await = entries.clone();
+                    // Watching every $PATH directory means most rescans are
+                    // triggered by writes that change nothing we care about (a
+                    // build dropping a binary into ~/.cargo/bin, say). Diff
+                    // first: rebuilding the matcher and re-rendering the list is
+                    // wasted work, and it disturbs an open window.
+                    {
+                        let mut current = state.entries.write().await;
+                        if *current == entries {
+                            tracing::debug!("Rescan found no entry changes, skipping update");
+                            continue;
+                        }
+                        *current = entries.clone();
+                    }
                     tracing::info!("Entries rescanned due to filesystem change");
                     let _ = ui_tx.send(DaemonEvent::EntriesUpdated(entries)).await;
                 }

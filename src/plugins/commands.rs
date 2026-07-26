@@ -28,10 +28,17 @@ impl Plugin for CommandsPlugin {
                 continue;
             };
 
-            for entry in read.flatten() {
-                let path = entry.path();
-                // Skip directories and non-executable files
-                if !is_executable(&path) {
+            for dir_entry in read.flatten() {
+                let path = dir_entry.path();
+                // file_type() comes from readdir's d_type on Linux, so the common
+                // case (a regular file) costs no stat at all. Symlinks need the
+                // target resolved, since one can point at a directory.
+                let is_dir = match dir_entry.file_type() {
+                    Ok(t) if t.is_symlink() => path.metadata().map(|m| m.is_dir()).unwrap_or(false),
+                    Ok(t) => t.is_dir(),
+                    Err(_) => path.metadata().map(|m| m.is_dir()).unwrap_or(false),
+                };
+                if is_dir || !is_executable(&path) {
                     continue;
                 }
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -63,11 +70,23 @@ impl Plugin for CommandsPlugin {
     }
 }
 
+/// Whether *this* user can actually execute `path`.
+///
+/// `access(X_OK)` rather than testing `mode & 0o111`: that reported any execute
+/// bit, so a root-owned 0700 binary in a `$PATH` directory was offered as a
+/// launchable command to a normal user who could never run it. One syscall, and
+/// it accounts for ownership, ACLs and mount options.
+///
+/// Returns true for directories (they're searchable), so callers must exclude
+/// those separately — `scan` does it from readdir's file type.
 fn is_executable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .map(|m| !m.is_dir() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false; // interior NUL; not a real path
+    };
+    // SAFETY: access(2) with a valid NUL-terminated path and a valid mode flag.
+    unsafe { libc::access(c_path.as_ptr(), libc::X_OK) == 0 }
 }
 
 #[cfg(test)]
@@ -97,12 +116,49 @@ mod tests {
     }
 
     #[test]
-    fn directory_is_not_executable_even_with_x_bit() {
+    fn scan_skips_directories_on_path() {
+        // is_executable() itself reports true for a directory (they're
+        // searchable), so this is scan's responsibility — assert it there.
+        let _guard = crate::test_env::lock();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("subdir");
         std::fs::create_dir(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(!is_executable(&dir));
+        write_file(tmp.path(), "realtool", 0o755);
+
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _env =
+            unsafe { crate::test_env::EnvVarGuard::set("PATH", tmp.path().to_str().unwrap()) };
+
+        let mut out = Vec::new();
+        CommandsPlugin::new(None).scan(&mut out);
+        assert!(out.iter().any(|e| e.name == "realtool"));
+        assert!(
+            !out.iter().any(|e| e.name == "subdir"),
+            "directories must not appear as commands"
+        );
+    }
+
+    #[test]
+    fn scan_skips_a_symlink_pointing_at_a_directory() {
+        let _guard = crate::test_env::lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("targetdir");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, tmp.path().join("dirlink")).unwrap();
+        write_file(tmp.path(), "realtool", 0o755);
+
+        // SAFETY: guarded by ENV_LOCK for the duration of this test.
+        let _env =
+            unsafe { crate::test_env::EnvVarGuard::set("PATH", tmp.path().to_str().unwrap()) };
+
+        let mut out = Vec::new();
+        CommandsPlugin::new(None).scan(&mut out);
+        assert!(out.iter().any(|e| e.name == "realtool"));
+        assert!(
+            !out.iter().any(|e| e.name == "dirlink"),
+            "a symlink to a directory must not appear as a command"
+        );
     }
 
     #[test]

@@ -13,6 +13,10 @@ pub struct Searcher {
     nucleo: Nucleo<usize>, // stores entry index into the master list
     entries: Vec<Entry>,
     notify: Arc<dyn Fn() + Send + Sync>,
+    /// How many distinct `Entry::priority` values the entry list contains, i.e.
+    /// how many buckets `results` can possibly fill. Lets it stop scanning once
+    /// they're all full instead of walking every match.
+    distinct_priorities: usize,
 }
 
 impl Searcher {
@@ -41,10 +45,17 @@ impl Searcher {
             }
         }
 
+        let distinct_priorities = entries
+            .iter()
+            .map(|e| e.priority)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+
         Self {
             nucleo,
             entries,
             notify,
+            distinct_priorities,
         }
     }
 
@@ -82,6 +93,14 @@ impl Searcher {
                 bucket.push(MatchedEntry {
                     entry: entry.clone(),
                 });
+            }
+            // Once every priority level has `limit` candidates, any further match
+            // lands in an already-full bucket and cannot change the output — so
+            // stop rather than walking all matches (2000+ on an empty query).
+            if buckets.len() == self.distinct_priorities
+                && buckets.values().all(|b| b.len() >= limit)
+            {
+                break;
             }
         }
 

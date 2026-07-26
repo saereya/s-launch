@@ -6,7 +6,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, CssProvider, Entry, EventControllerKey,
-    Image, Label, ListBox, ListBoxRow, Orientation, Picture, PropagationPhase, ScrolledWindow,
+    Image, Label, ListBox, ListBoxRow, Orientation, PropagationPhase, ScrolledWindow,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use tokio::sync::mpsc;
@@ -279,9 +279,32 @@ fn scroll_to_row(scroll: &ScrolledWindow, row: &ListBoxRow) {
     }
 }
 
+// ── Icon cache ────────────────────────────────────────────────────────────────
+
+/// Decoded textures for absolute-path icons, keyed by path.
+///
+/// `gdk::Texture::from_filename` decodes the image synchronously on the main
+/// thread, and `rebuild_list` runs on every keystroke — so without this the same
+/// PNG or SVG was decoded again on each one. Flatpak and Snap `.desktop` files
+/// use absolute icon paths as a matter of course, so this isn't a rare path.
+/// Failures are cached as `None` too, so a broken path isn't retried per
+/// keystroke either.
+type IconCache = Rc<RefCell<std::collections::HashMap<String, Option<gtk4::gdk::Texture>>>>;
+
+fn cached_texture(cache: &IconCache, path: &str) -> Option<gtk4::gdk::Texture> {
+    if let Some(hit) = cache.borrow().get(path) {
+        return hit.clone();
+    }
+    let texture = gtk4::gdk::Texture::from_filename(path)
+        .inspect_err(|e| tracing::debug!("Could not load icon {path}: {e}"))
+        .ok();
+    cache.borrow_mut().insert(path.to_string(), texture.clone());
+    texture
+}
+
 // ── List helpers ──────────────────────────────────────────────────────────────
 
-fn rebuild_list(list: &ListBox, state: &UiState) {
+fn rebuild_list(list: &ListBox, state: &UiState, icons: &IconCache) {
     list.remove_all();
 
     for entry in &state.results {
@@ -289,15 +312,14 @@ fn rebuild_list(list: &ListBox, state: &UiState) {
 
         if let Some(icon_str) = &entry.icon {
             if std::path::Path::new(icon_str).is_absolute() {
-                // Picture scales to fill its allocation; can_shrink prevents it from
-                // expanding the row when the source image is larger than 32px.
-                let pic = Picture::for_filename(icon_str.as_str());
-                pic.set_can_shrink(true);
-                pic.set_size_request(32, 32);
-                pic.set_halign(Align::Center);
-                pic.set_valign(Align::Center);
-                hbox.append(&pic);
+                if let Some(texture) = cached_texture(icons, icon_str) {
+                    let img = Image::from_paintable(Some(&texture));
+                    img.set_pixel_size(32);
+                    img.set_valign(Align::Center);
+                    hbox.append(&img);
+                }
             } else {
+                // Icon-name lookups go through GtkIconTheme, which caches.
                 let img = Image::from_icon_name(icon_str);
                 img.set_pixel_size(32);
                 img.set_valign(Align::Center);
@@ -499,6 +521,8 @@ fn build_ui(app: &Application, startup: Startup) {
         let _ = redraw_tx.try_send(());
     });
 
+    let icons: IconCache = Rc::new(RefCell::new(std::collections::HashMap::new()));
+
     let mut searcher = Searcher::new(entries, notify);
     searcher.update_pattern("");
     let initial_results = searcher
@@ -517,19 +541,20 @@ fn build_ui(app: &Application, startup: Startup) {
         pending_confirm: None,
     }));
 
-    rebuild_list(&list, &state.borrow());
+    rebuild_list(&list, &state.borrow(), &icons);
 
     // ── Search input ──────────────────────────────────────────────────────────
     {
         let list = list.clone();
         let state = state.clone();
+        let icons = icons.clone();
         search_entry.connect_changed(move |entry| {
             {
                 let mut s = state.borrow_mut();
                 s.query = entry.text().to_string();
                 s.refresh_results();
             }
-            rebuild_list(&list, &state.borrow());
+            rebuild_list(&list, &state.borrow(), &icons);
         });
     }
 
@@ -540,6 +565,7 @@ fn build_ui(app: &Application, startup: Startup) {
         let list = list.clone();
         let scroll = scroll.clone();
         let state = state.clone();
+        let icons = icons.clone();
         let window_ref = window.clone();
         let entry_ref = search_entry.clone();
 
@@ -566,7 +592,7 @@ fn build_ui(app: &Application, startup: Startup) {
                 };
                 if activation == Activation::AwaitingConfirmation {
                     // Stay open showing the prompt; Escape or typing cancels.
-                    rebuild_list(&list, &state.borrow());
+                    rebuild_list(&list, &state.borrow(), &icons);
                     return glib::Propagation::Stop;
                 }
                 window_ref.set_visible(false);
@@ -616,12 +642,13 @@ fn build_ui(app: &Application, startup: Startup) {
     {
         let state = state.clone();
         let list_ref = list.clone();
+        let icons = icons.clone();
         let window_ref = window.clone();
         let entry_ref = search_entry.clone();
         list.connect_row_activated(move |_, row| {
             let activation = state.borrow_mut().launch_at(row.index() as usize);
             if activation == Activation::AwaitingConfirmation {
-                rebuild_list(&list_ref, &state.borrow());
+                rebuild_list(&list_ref, &state.borrow(), &icons);
                 return;
             }
             window_ref.set_visible(false);
@@ -653,11 +680,12 @@ fn build_ui(app: &Application, startup: Startup) {
     {
         let list = list.clone();
         let state = state.clone();
+        let icons = icons.clone();
 
         glib::MainContext::default().spawn_local(async move {
             while redraw_rx.recv().await.is_ok() {
                 if state.borrow_mut().resync_results() {
-                    rebuild_list(&list, &state.borrow());
+                    rebuild_list(&list, &state.borrow(), &icons);
                 }
             }
         });
@@ -671,6 +699,7 @@ fn build_ui(app: &Application, startup: Startup) {
         let entry_ref = search_entry.clone();
         let list = list.clone();
         let state = state.clone();
+        let icons = icons.clone();
 
         glib::MainContext::default().spawn_local(async move {
             while let Ok(event) = rx.recv().await {
@@ -698,7 +727,7 @@ fn build_ui(app: &Application, startup: Startup) {
                         // window config used to be frozen at build time.
                         widgets.apply_config(&state.borrow().config);
                         provider.load_from_string(&new_css);
-                        rebuild_list(&list, &state.borrow());
+                        rebuild_list(&list, &state.borrow(), &icons);
                     }
                     DaemonEvent::EntriesUpdated(entries) => {
                         // A rescan fires on any write to a watched directory, so
@@ -712,7 +741,7 @@ fn build_ui(app: &Application, startup: Startup) {
                             s.refresh_after_entry_change()
                         };
                         if changed {
-                            rebuild_list(&list, &state.borrow());
+                            rebuild_list(&list, &state.borrow(), &icons);
                         }
                     }
                     DaemonEvent::Quit => {
