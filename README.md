@@ -59,9 +59,14 @@ Type to search, `Enter` to launch, `Escape` to hide. Once that works, bind
 | `htop` | Anything on `$PATH` |
 | `=2 + 2 * 6` | Inline math, answer copied to clipboard |
 | `:fire` | Emoji search by name, copied to clipboard |
-| `shutdown`, `lock` | Power/session actions |
+| `shutdown`, `lock` | Power/session actions — Enter once to confirm, again to run |
 
 `Up`/`Down` or `Tab`/`Shift+Tab` moves the selection.
+
+Power actions ask before they run: the first `Enter` swaps the list for a
+single `Confirm: ...` row, and only the second one executes. `Escape` or
+typing anything cancels. Set `power_confirm = false` under `[plugins]` if
+you'd rather they fire immediately.
 
 ## CLI
 

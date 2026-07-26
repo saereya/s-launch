@@ -192,6 +192,24 @@ fn acquire_lock(path: &std::path::Path) -> anyhow::Result<std::fs::File> {
     Ok(file)
 }
 
+/// Bind the socket owner-only from the moment it exists.
+///
+/// `UnixListener::bind` creates the socket as `0777 & ~umask` — 0755 under a
+/// typical umask — and only after that can we chmod it to 0600, leaving a window
+/// where anyone able to reach the path could connect and drive launches. In
+/// practice both `$XDG_RUNTIME_DIR` and the `/run/user/<uid>` fallback are 0700
+/// so the window is unreachable, but that puts the entire guarantee on the
+/// parent directory. Narrowing the umask across the bind closes it here instead.
+fn bind_private(path: &std::path::Path) -> std::io::Result<UnixListener> {
+    // SAFETY: umask is process-global, so this is only sound because it runs
+    // during startup while the main thread is blocked waiting on the bind result
+    // and nothing else is creating files. Restored immediately either way.
+    let previous = unsafe { libc::umask(0o177) };
+    let result = UnixListener::bind(path);
+    unsafe { libc::umask(previous) };
+    result
+}
+
 /// Claim the IPC socket. Returns an error if another daemon owns it.
 pub async fn bind() -> anyhow::Result<IpcServer> {
     let lock = acquire_lock(&ipc::lock_path())?;
@@ -210,8 +228,9 @@ pub async fn bind() -> anyhow::Result<IpcServer> {
         }
     }
 
-    let listener = UnixListener::bind(&socket_path)?;
-    // Restrict to the owner; control of this socket means control of launches.
+    let listener = bind_private(&socket_path)?;
+    // Belt and braces behind the umask: control of this socket means control of
+    // what this user launches, so verify the mode rather than assume it.
     {
         use std::os::unix::fs::PermissionsExt;
         if let Err(e) =

@@ -45,6 +45,35 @@ struct UiState {
     /// query. Until they have, a result set arriving late re-selects the top
     /// row; afterwards it keeps the highlight on whatever they picked.
     selection_moved: bool,
+    /// A power action awaiting a second Enter. Cleared by any query change, so
+    /// typing or Escape cancels it.
+    pending_confirm: Option<AppEntry>,
+}
+
+/// What activating a result did, so the caller knows whether to close.
+#[derive(Debug, PartialEq, Eq)]
+enum Activation {
+    /// Launched (or there was nothing to launch) — the window should close.
+    Done,
+    /// Replaced the list with a confirmation prompt — stay open.
+    AwaitingConfirmation,
+}
+
+/// The single row shown while a power action waits for confirmation. Carries the
+/// original `kind`, so activating it runs the action.
+fn confirm_row(entry: &AppEntry) -> AppEntry {
+    AppEntry {
+        name: format!("Confirm: {}", entry.name),
+        description: Some(match &entry.kind {
+            EntryKind::Power { command } => {
+                format!("Enter to run `{command}`, Escape to cancel")
+            }
+            _ => "Enter to confirm, Escape to cancel".to_string(),
+        }),
+        icon: entry.icon.clone(),
+        kind: entry.kind.clone(),
+        priority: 0,
+    }
 }
 
 impl UiState {
@@ -66,6 +95,8 @@ impl UiState {
         }
         self.selected = 0;
         self.selection_moved = false;
+        // Typing anything cancels a pending power confirmation.
+        self.pending_confirm = None;
     }
 
     /// Re-poll the matcher for the *unchanged* query and adopt the result if it
@@ -75,6 +106,12 @@ impl UiState {
     /// may only be part of the match set. The matcher's notify callback calls
     /// this until it settles.
     fn resync_results(&mut self) -> bool {
+        if self.pending_confirm.is_some() {
+            // The list is showing a confirmation prompt. A late matcher result or
+            // a background rescan must not replace it — that would put a
+            // different, unconfirmed entry under the cursor mid-keystroke.
+            return false;
+        }
         if self.query.starts_with('=') || self.query.starts_with(':') {
             return false; // prefix plugins bypass the matcher entirely
         }
@@ -122,22 +159,47 @@ impl UiState {
             .unwrap_or(0);
     }
 
-    fn launch_at(&self, index: usize) {
-        if let Some(entry) = self.results.get(index) {
-            match &entry.kind {
-                EntryKind::App { .. } => {
-                    AppsPlugin::new(self.config.plugins.terminal.clone()).launch(entry)
-                }
-                EntryKind::Command { .. } => {
-                    CommandsPlugin::new(self.config.plugins.terminal.clone()).launch(entry)
-                }
-                EntryKind::MathResult { .. } => MathPlugin.launch(entry),
-                EntryKind::EmojiResult { .. } => EmojiPlugin.launch(entry),
-                EntryKind::Power { .. } => {
-                    PowerPlugin::new(self.config.plugins.power_commands.clone()).launch(entry)
-                }
+    /// Whether activating `entry` should ask for confirmation rather than run.
+    ///
+    /// Only power actions qualify: they're irreversible, and priority ordering
+    /// puts them behind apps and commands but not out of reach — a query with no
+    /// app or command match leaves one selected at index 0, where a single
+    /// stray Enter would suspend or power off the machine.
+    fn needs_confirmation(&self, entry: &AppEntry) -> bool {
+        matches!(entry.kind, EntryKind::Power { .. })
+            && self.config.plugins.power_confirm
+            && self.pending_confirm.as_ref() != Some(entry)
+    }
+
+    fn launch_at(&mut self, index: usize) -> Activation {
+        let Some(entry) = self.results.get(index).cloned() else {
+            return Activation::Done;
+        };
+
+        if self.needs_confirmation(&entry) {
+            let prompt = confirm_row(&entry);
+            self.pending_confirm = Some(prompt.clone());
+            self.results = vec![prompt];
+            self.selected = 0;
+            self.selection_moved = false;
+            return Activation::AwaitingConfirmation;
+        }
+
+        self.pending_confirm = None;
+        match &entry.kind {
+            EntryKind::App { .. } => {
+                AppsPlugin::new(self.config.plugins.terminal.clone()).launch(&entry)
+            }
+            EntryKind::Command { .. } => {
+                CommandsPlugin::new(self.config.plugins.terminal.clone()).launch(&entry)
+            }
+            EntryKind::MathResult { .. } => MathPlugin.launch(&entry),
+            EntryKind::EmojiResult { .. } => EmojiPlugin.launch(&entry),
+            EntryKind::Power { .. } => {
+                PowerPlugin::new(self.config.plugins.power_commands.clone()).launch(&entry)
             }
         }
+        Activation::Done
     }
 }
 
@@ -452,6 +514,7 @@ fn build_ui(app: &Application, startup: Startup) {
         selected: 0,
         results: initial_results,
         selection_moved: false,
+        pending_confirm: None,
     }));
 
     rebuild_list(&list, &state.borrow());
@@ -496,9 +559,15 @@ fn build_ui(app: &Application, startup: Startup) {
             }
 
             if key == K::Return || key == K::KP_Enter {
-                {
-                    let s = state.borrow();
-                    s.launch_at(s.selected);
+                let activation = {
+                    let mut s = state.borrow_mut();
+                    let index = s.selected;
+                    s.launch_at(index)
+                };
+                if activation == Activation::AwaitingConfirmation {
+                    // Stay open showing the prompt; Escape or typing cancels.
+                    rebuild_list(&list, &state.borrow());
+                    return glib::Propagation::Stop;
                 }
                 window_ref.set_visible(false);
                 entry_ref.set_text(""); // fires connect_changed
@@ -546,12 +615,14 @@ fn build_ui(app: &Application, startup: Startup) {
     // ── Mouse click ───────────────────────────────────────────────────────────
     {
         let state = state.clone();
+        let list_ref = list.clone();
         let window_ref = window.clone();
         let entry_ref = search_entry.clone();
         list.connect_row_activated(move |_, row| {
-            {
-                let s = state.borrow();
-                s.launch_at(row.index() as usize);
+            let activation = state.borrow_mut().launch_at(row.index() as usize);
+            if activation == Activation::AwaitingConfirmation {
+                rebuild_list(&list_ref, &state.borrow());
+                return;
             }
             window_ref.set_visible(false);
             entry_ref.set_text(""); // fires connect_changed
@@ -650,5 +721,126 @@ fn build_ui(app: &Application, startup: Startup) {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// UiState holds no GTK types, so the confirmation logic is testable without
+    /// a display. `needs_confirmation` and `confirm_row` are the whole decision —
+    /// `launch_at` itself is not called here, since confirming actually spawns.
+    fn ui_state(power_confirm: bool) -> UiState {
+        let mut config = Config::default();
+        config.plugins.power_confirm = power_confirm;
+        UiState {
+            config,
+            searcher: Searcher::new(Vec::new(), Arc::new(|| {})),
+            query: String::new(),
+            selected: 0,
+            results: Vec::new(),
+            selection_moved: false,
+            pending_confirm: None,
+        }
+    }
+
+    fn power_entry() -> AppEntry {
+        AppEntry {
+            name: "Shutdown".into(),
+            description: Some("systemctl poweroff".into()),
+            icon: Some("system-shutdown".into()),
+            kind: EntryKind::Power {
+                command: "systemctl poweroff".into(),
+            },
+            priority: 2,
+        }
+    }
+
+    fn app_entry() -> AppEntry {
+        AppEntry {
+            name: "Firefox".into(),
+            description: None,
+            icon: None,
+            kind: EntryKind::App {
+                exec: "firefox".into(),
+                terminal: false,
+            },
+            priority: 0,
+        }
+    }
+
+    #[test]
+    fn power_action_asks_before_running() {
+        let state = ui_state(true);
+        assert!(state.needs_confirmation(&power_entry()));
+    }
+
+    #[test]
+    fn ordinary_results_never_ask() {
+        let state = ui_state(true);
+        assert!(!state.needs_confirmation(&app_entry()));
+    }
+
+    #[test]
+    fn confirming_the_prompt_runs_it_rather_than_re_prompting() {
+        // Second Enter: the prompt row is what's selected, and it's the entry
+        // recorded as pending, so it must pass straight through to launch.
+        let mut state = ui_state(true);
+        let prompt = confirm_row(&power_entry());
+        state.pending_confirm = Some(prompt.clone());
+        assert!(!state.needs_confirmation(&prompt));
+    }
+
+    #[test]
+    fn a_different_power_action_still_asks_while_one_is_pending() {
+        let mut state = ui_state(true);
+        state.pending_confirm = Some(confirm_row(&power_entry()));
+        let reboot = AppEntry {
+            name: "Reboot".into(),
+            kind: EntryKind::Power {
+                command: "systemctl reboot".into(),
+            },
+            ..power_entry()
+        };
+        assert!(state.needs_confirmation(&reboot));
+    }
+
+    #[test]
+    fn confirmation_can_be_turned_off() {
+        let state = ui_state(false);
+        assert!(!state.needs_confirmation(&power_entry()));
+    }
+
+    #[test]
+    fn typing_cancels_a_pending_confirmation() {
+        let mut state = ui_state(true);
+        state.pending_confirm = Some(confirm_row(&power_entry()));
+        state.refresh_results();
+        assert_eq!(state.pending_confirm, None);
+    }
+
+    #[test]
+    fn prompt_row_keeps_the_action_so_confirming_runs_it() {
+        let entry = power_entry();
+        let prompt = confirm_row(&entry);
+        assert_eq!(prompt.kind, entry.kind);
+        assert!(prompt.name.starts_with("Confirm: "));
+        assert!(prompt
+            .description
+            .as_deref()
+            .is_some_and(|d| d.contains("systemctl poweroff") && d.contains("Escape")));
+    }
+
+    #[test]
+    fn a_pending_prompt_is_not_replaced_by_late_matcher_results() {
+        // Otherwise an async result or a background rescan could swap a
+        // different, unconfirmed entry under the cursor mid-keystroke.
+        let mut state = ui_state(true);
+        let prompt = confirm_row(&power_entry());
+        state.pending_confirm = Some(prompt.clone());
+        state.results = vec![prompt.clone()];
+        assert!(!state.resync_results());
+        assert_eq!(state.results, vec![prompt]);
     }
 }

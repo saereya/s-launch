@@ -28,6 +28,10 @@ apps = true
 commands = true
 # System power/session actions (shutdown, reboot, suspend, lock)
 power = true
+# Require a second Enter before a power action runs. Keep this on unless you
+# like living dangerously: a short query with no app or command match leaves a
+# power action selected, where one stray Enter would shut the machine down.
+power_confirm = true
 # Result priority order — plugins listed first appear before later ones in results.
 # Remove or reorder entries to change which plugin's results show first.
 priority = ["apps", "commands", "power"]

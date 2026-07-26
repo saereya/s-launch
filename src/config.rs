@@ -40,6 +40,11 @@ pub struct PluginsConfig {
     pub apps: bool,
     pub commands: bool,
     pub power: bool,
+    /// Require a second Enter before a power action runs. On by default: these
+    /// are the only irreversible results slaunch produces, and a fuzzy match can
+    /// put one under the cursor from a short query, so a single mistyped Enter
+    /// would otherwise be enough to suspend or power off the machine.
+    pub power_confirm: bool,
     /// Order determines result priority: first entry appears before later ones.
     pub priority: Vec<String>,
     /// Terminal emulator to use for Terminal=true apps. None = auto-detect.
@@ -109,6 +114,7 @@ impl Default for PluginsConfig {
             apps: true,
             commands: true,
             power: true,
+            power_confirm: true,
             priority: vec!["apps".into(), "commands".into(), "power".into()],
             terminal: None,
             power_commands: PowerCommands::default(),
