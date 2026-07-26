@@ -28,7 +28,7 @@ impl Plugin for MathPlugin {
 
     fn launch(&self, entry: &Entry) {
         if let EntryKind::MathResult { value } = &entry.kind {
-            if let Err(e) = std::process::Command::new("wl-copy").arg(value).spawn() {
+            if let Err(e) = super::detached_command("wl-copy").arg(value).spawn() {
                 tracing::error!("Failed to copy math result to clipboard: {e}");
             }
         }

@@ -23,9 +23,15 @@ gotchas), see [CLAUDE.md](CLAUDE.md) once you're past this file.
 ## Getting started
 
 ```sh
-cargo check      # confirms everything compiles
-make install     # builds --release, installs to ~/.local/bin,
-                  # seeds ~/.config/slaunch/ only if it doesn't exist yet
+cargo check           # confirms everything compiles
+sudo make install     # builds --release, installs to /usr/local/bin,
+                      # seeds ~/.config/slaunch/ only if it doesn't exist yet
+```
+
+To install without root, point `PREFIX` somewhere you own:
+
+```sh
+make install PREFIX=~/.local    # installs to ~/.local/bin
 ```
 
 Run the daemon (keep this terminal open so you can see the logs):

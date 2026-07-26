@@ -21,8 +21,9 @@ cargo test                 # run the unit test suite
 cargo clippy                # lint
 cargo fmt                  # format
 
-make install                # builds --release, installs to ~/.local/bin, seeds ~/.config/slaunch/ if absent
-make uninstall
+sudo make install           # builds --release, installs to $PREFIX/bin (default /usr/local/bin), seeds ~/.config/slaunch/ if absent
+make install PREFIX=~/.local  # rootless alternative
+sudo make uninstall
 
 RUST_LOG=slaunch=debug cargo run -- daemon   # verbose logging (default filter is "slaunch=info")
 ```

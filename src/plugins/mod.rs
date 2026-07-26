@@ -6,6 +6,34 @@ pub mod power;
 
 const FALLBACK_TERMINALS: &[&str] = &["foot", "alacritty", "kitty", "wezterm", "xterm"];
 
+/// Build a `Command` detached from the daemon: no inherited stdio, and SIGCHLD
+/// restored to its default disposition in the child.
+///
+/// `run_daemon` sets SIGCHLD to `SIG_IGN` so the kernel auto-reaps the
+/// processes we spawn and never wait on. That disposition is *inherited across
+/// `execve`* — POSIX resets caught signals to default but leaves ignored ones
+/// ignored — so without this reset every app we launch would start with SIGCHLD
+/// ignored, which makes `system()`, `popen()` and bare `waitpid()` calls *inside
+/// that app* fail with ECHILD. Undo it between fork and exec.
+pub(super) fn detached_command(program: &str) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut cmd = std::process::Command::new(program);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: pre_exec runs in the forked child before exec, where only
+    // async-signal-safe calls are permitted. signal(2) is on the POSIX
+    // async-signal-safe list, and we touch no other process state.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    cmd
+}
+
 pub(super) fn launch_in_terminal(cmd: &str, terminal: Option<&str>) {
     if shell_words::split(cmd).map_or(true, |a| a.is_empty()) {
         tracing::error!("Empty or unparseable exec string: '{cmd}'");
@@ -14,11 +42,8 @@ pub(super) fn launch_in_terminal(cmd: &str, terminal: Option<&str>) {
     // Wrap in a shell so the terminal stays open after the command exits.
     let shell_cmd = format!("{cmd}; exec $SHELL");
     let spawn = |term: &str| {
-        std::process::Command::new(term)
+        detached_command(term)
             .args(["-e", "sh", "-c", &shell_cmd])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .spawn()
     };
     if let Some(term) = terminal {
@@ -36,7 +61,11 @@ pub(super) fn launch_in_terminal(cmd: &str, terminal: Option<&str>) {
 }
 
 /// A single searchable result that a plugin provides.
-#[derive(Debug, Clone)]
+///
+/// `PartialEq` is how the UI recognises an entry across a result-set refresh —
+/// both to keep the highlight on the same row and to skip rebuilding the list
+/// when a rescan produced an identical set.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// Display name shown in the results list
     pub name: String,
@@ -50,7 +79,7 @@ pub struct Entry {
     pub priority: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryKind {
     /// XDG .desktop application
     App { exec: String, terminal: bool },

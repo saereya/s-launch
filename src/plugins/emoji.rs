@@ -42,7 +42,7 @@ impl Plugin for EmojiPlugin {
 
     fn launch(&self, entry: &Entry) {
         if let EntryKind::EmojiResult { emoji } = &entry.kind {
-            if let Err(e) = std::process::Command::new("wl-copy").arg(emoji).spawn() {
+            if let Err(e) = super::detached_command("wl-copy").arg(emoji).spawn() {
                 tracing::error!("Failed to copy emoji to clipboard: {e}");
             }
         }

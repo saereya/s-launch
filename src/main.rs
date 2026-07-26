@@ -60,6 +60,10 @@ fn run_daemon() -> anyhow::Result<()> {
     // Auto-reap launched children. We spawn apps/wl-copy with std::process and
     // never wait() on them, so without this each one becomes a zombie when it
     // exits. Ignoring SIGCHLD makes the kernel reap them automatically.
+    //
+    // This disposition is inherited across execve, so it would otherwise leak
+    // into every app we launch and break their own subprocess handling —
+    // `plugins::detached_command` resets it to SIG_DFL in each child.
     // SAFETY: setting a signal disposition has no preconditions; we never call
     // wait() ourselves so the ECHILD interaction with SIG_IGN doesn't apply.
     unsafe {
@@ -86,21 +90,41 @@ fn run_daemon() -> anyhow::Result<()> {
     // Channel from the IPC socket task into the GTK event loop
     let (tx, rx) = mpsc::channel::<daemon::DaemonEvent>(32);
 
-    // Spawn the tokio IPC socket listener on a background thread
+    // Spawn the tokio IPC socket listener on a background thread. Its startup
+    // result comes back over `ready_rx`: without the socket there is no way to
+    // reach this process, so a bind failure has to abort the daemon rather than
+    // leave a GUI running that `slaunch show` can never talk to.
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
     let state_clone = state.clone();
     std::thread::spawn(move || {
-        match tokio::runtime::Builder::new_multi_thread()
+        let rt = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
         {
-            Ok(rt) => rt.block_on(async move {
-                if let Err(e) = daemon::run_socket(state_clone, tx).await {
-                    tracing::error!("IPC socket error: {e}");
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = ready_tx.send(Err(anyhow::anyhow!("failed to start IPC runtime: {e}")));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let server = match daemon::bind().await {
+                Ok(server) => server,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
                 }
-            }),
-            Err(e) => tracing::error!("Failed to start IPC runtime: {e}"),
-        }
+            };
+            let _ = ready_tx.send(Ok(()));
+            daemon::serve(server, state_clone, tx).await;
+        });
     });
+
+    match ready_rx.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(_) => anyhow::bail!("IPC thread exited before reporting socket status"),
+    }
 
     // GTK must run on the main thread (required by most Wayland compositors).
     ui::run(state, rx)

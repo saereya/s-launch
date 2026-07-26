@@ -145,17 +145,22 @@ pub fn spawn_watcher(state: Arc<DaemonState>, cfg: &Config, ui_tx: mpsc::Sender<
     });
 }
 
-/// Run the IPC socket server loop.
-/// `tx` sends DaemonEvents into the Iced app subscription channel.
-pub async fn run_socket(
-    state: Arc<DaemonState>,
-    tx: mpsc::Sender<DaemonEvent>,
-) -> anyhow::Result<()> {
-    {
-        let cfg = state.config.read().await;
-        spawn_watcher(state.clone(), &cfg, tx.clone());
-    }
+/// A bound IPC socket with signal handlers installed, ready to serve.
+///
+/// Binding is split from serving so that startup failures — another live daemon,
+/// an unwritable runtime dir, a socket file that can't be cleared — are reported
+/// to `run_daemon` *before* it hands the main thread to GTK. A daemon that
+/// failed to bind has to exit: otherwise it runs on as a GUI process that
+/// `slaunch show` can never reach, with nothing but a log line to say why.
+pub struct IpcServer {
+    listener: UnixListener,
+    socket_path: PathBuf,
+    sigterm: tokio::signal::unix::Signal,
+    sigint: tokio::signal::unix::Signal,
+}
 
+/// Claim the IPC socket. Returns an error if another daemon owns it.
+pub async fn bind() -> anyhow::Result<IpcServer> {
     let socket_path = ipc::socket_path();
 
     if socket_path.exists() {
@@ -182,10 +187,32 @@ pub async fn run_socket(
     }
     tracing::info!("IPC socket listening at {}", socket_path.display());
 
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
+    Ok(IpcServer {
+        listener,
+        socket_path,
+        sigterm: signal(SignalKind::terminate())?,
+        sigint: signal(SignalKind::interrupt())?,
+    })
+}
 
-    let result = loop {
+/// Serve IPC commands until told to shut down.
+/// `tx` sends DaemonEvents into the GTK event loop.
+pub async fn serve(server: IpcServer, state: Arc<DaemonState>, tx: mpsc::Sender<DaemonEvent>) {
+    let IpcServer {
+        listener,
+        socket_path,
+        mut sigterm,
+        mut sigint,
+    } = server;
+
+    // Only start watching the filesystem once the socket is ours, so an instance
+    // that loses the bind race doesn't leave inotify watches behind.
+    {
+        let cfg = state.config.read().await;
+        spawn_watcher(state.clone(), &cfg, tx.clone());
+    }
+
+    loop {
         tokio::select! {
             res = listener.accept() => {
                 match res {
@@ -255,18 +282,17 @@ pub async fn run_socket(
             _ = sigterm.recv() => {
                 tracing::info!("Received SIGTERM, shutting down");
                 let _ = tx.send(DaemonEvent::Quit).await;
-                break Ok(());
+                break;
             }
             _ = sigint.recv() => {
                 tracing::info!("Received SIGINT, shutting down");
                 let _ = tx.send(DaemonEvent::Quit).await;
-                break Ok(());
+                break;
             }
         }
-    };
+    }
 
     let _ = std::fs::remove_file(&socket_path);
-    result
 }
 
 #[cfg(test)]

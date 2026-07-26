@@ -41,9 +41,15 @@ struct UiState {
     query: String,
     selected: usize,
     results: Vec<AppEntry>,
+    /// Whether the user has moved the selection off the top row for the current
+    /// query. Until they have, a result set arriving late re-selects the top
+    /// row; afterwards it keeps the highlight on whatever they picked.
+    selection_moved: bool,
 }
 
 impl UiState {
+    /// Recompute results for a query the user just changed. The result set is
+    /// semantically new, so the selection resets to the top.
     fn refresh_results(&mut self) {
         if self.query.starts_with('=') {
             let mut math_out = Vec::new();
@@ -56,14 +62,50 @@ impl UiState {
             self.results = emoji_out;
         } else {
             self.searcher.update_pattern(&self.query);
-            self.results = self
-                .searcher
-                .results(self.config.window.max_results)
-                .into_iter()
-                .map(|m| m.entry)
-                .collect();
+            self.results = self.matcher_results();
         }
         self.selected = 0;
+        self.selection_moved = false;
+    }
+
+    /// Re-poll the matcher for the *unchanged* query and adopt the result if it
+    /// differs. Returns whether the list needs rebuilding.
+    ///
+    /// nucleo matches on background threads, so what `refresh_results` rendered
+    /// may only be part of the match set. The matcher's notify callback calls
+    /// this until it settles.
+    fn resync_results(&mut self) -> bool {
+        if self.query.starts_with('=') || self.query.starts_with(':') {
+            return false; // prefix plugins bypass the matcher entirely
+        }
+        let fresh = self.matcher_results();
+        if fresh == self.results {
+            return false;
+        }
+        self.adopt_results(fresh);
+        true
+    }
+
+    fn matcher_results(&mut self) -> Vec<AppEntry> {
+        self.searcher
+            .results(self.config.window.max_results)
+            .into_iter()
+            .map(|m| m.entry)
+            .collect()
+    }
+
+    /// Swap in a new result list without yanking the highlight off the entry the
+    /// user deliberately selected, as long as it survived into the new list.
+    fn adopt_results(&mut self, fresh: Vec<AppEntry>) {
+        let anchor = if self.selection_moved {
+            self.results.get(self.selected).cloned()
+        } else {
+            None
+        };
+        self.results = fresh;
+        self.selected = anchor
+            .and_then(|a| self.results.iter().position(|e| *e == a))
+            .unwrap_or(0);
     }
 
     fn launch_at(&self, index: usize) {
@@ -177,6 +219,18 @@ pub fn run(
 ) -> anyhow::Result<()> {
     gtk4::init().map_err(|e| anyhow::anyhow!("GTK init: {e}"))?;
 
+    // Check before touching layer-shell: gtk4-layer-shell aborts the process
+    // via g_error if the GDK backend isn't Wayland, which would kill the daemon
+    // on a cryptic assertion instead of telling the user what's wrong.
+    if !gtk4_layer_shell::is_supported() {
+        anyhow::bail!(
+            "the wlr-layer-shell protocol is not available on this display.\n\
+             slaunch needs a Wayland compositor that implements \
+             zwlr_layer_shell_v1 (Sway, Hyprland, river, ...).\n\
+             GNOME/Mutter and X11 do not support it."
+        );
+    }
+
     // Bridge: tokio mpsc → async_channel (Sender is Send, safe from bg thread).
     // glib::MainContext::channel was removed in glib 0.18; async_channel is the
     // replacement that works with glib's spawn_local.
@@ -202,7 +256,18 @@ pub fn run(
         });
     });
 
-    let app = Application::builder().application_id("dev.slaunch").build();
+    // NON_UNIQUE is deliberate. GApplication's default single-instance handling
+    // registers the app id on the session bus, and a second process that finds
+    // the name taken becomes a *remote* instance: it forwards `activate` to the
+    // primary and `run()` returns immediately, so the daemon would exit
+    // silently with status 0 after already binding its IPC socket — leaving a
+    // stale socket and no explanation. slaunch does its own single-instance
+    // check when it claims that socket (`daemon::bind`), which reports the
+    // conflict properly, so GTK's version is redundant here as well as harmful.
+    let app = Application::builder()
+        .application_id("dev.slaunch")
+        .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
 
     // Cell lets us take the receiver exactly once inside the activate closure
     // without needing Rc (connect_activate doesn't require Send).
@@ -312,8 +377,16 @@ fn build_ui(
     content.append(&scroll);
     window.set_child(Some(&content));
 
-    // Initial search state
-    let mut searcher = Searcher::new(entries);
+    // Initial search state. The matcher runs on background threads and signals
+    // completion through `notify`; this channel relays that onto the glib main
+    // loop, where the list can actually be rebuilt. Capacity 1 with try_send
+    // coalesces bursts — one pending wake-up is all we need.
+    let (redraw_tx, redraw_rx) = async_channel::bounded::<()>(1);
+    let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || {
+        let _ = redraw_tx.try_send(());
+    });
+
+    let mut searcher = Searcher::new(entries, notify);
     searcher.update_pattern("");
     let initial_results = searcher
         .results(config.window.max_results)
@@ -327,6 +400,7 @@ fn build_ui(
         query: String::new(),
         selected: 0,
         results: initial_results,
+        selection_moved: false,
     }));
 
     rebuild_list(&list, &state.borrow());
@@ -381,6 +455,7 @@ fn build_ui(
                     let mut s = state.borrow_mut();
                     if !s.results.is_empty() {
                         s.selected = (s.selected + 1).min(s.results.len() - 1);
+                        s.selection_moved = true;
                     }
                 }
                 let idx = state.borrow().selected as i32;
@@ -397,6 +472,7 @@ fn build_ui(
                     let mut s = state.borrow_mut();
                     if s.selected > 0 {
                         s.selected -= 1;
+                        s.selection_moved = true;
                     }
                 }
                 let idx = state.borrow().selected as i32;
@@ -441,6 +517,23 @@ fn build_ui(
             entry_ref.set_text(""); // fires connect_changed → clears query + list
             win.set_visible(false);
             glib::Propagation::Stop
+        });
+    }
+
+    // ── Late matcher results ─────────────────────────────────────────────────
+    // Fuzzy matching is asynchronous, so the set rendered on a keystroke can be
+    // partial. The matcher wakes us here when more has landed; without this the
+    // list would keep showing truncated results until the next keystroke.
+    {
+        let list = list.clone();
+        let state = state.clone();
+
+        glib::MainContext::default().spawn_local(async move {
+            while redraw_rx.recv().await.is_ok() {
+                if state.borrow_mut().resync_results() {
+                    rebuild_list(&list, &state.borrow());
+                }
+            }
         });
     }
 

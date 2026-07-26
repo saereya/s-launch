@@ -163,13 +163,7 @@ fn parse_exec(exec: &str) -> Option<Vec<String>> {
 
 fn launch_detached(exec: &str) {
     let Some(args) = parse_exec(exec) else { return };
-    if let Err(e) = std::process::Command::new(&args[0])
-        .args(&args[1..])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    if let Err(e) = super::detached_command(&args[0]).args(&args[1..]).spawn() {
         tracing::error!("Failed to launch '{exec}': {e}");
     }
 }

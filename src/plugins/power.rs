@@ -59,13 +59,7 @@ fn spawn_command(command: &str) {
             return;
         }
     };
-    if let Err(e) = std::process::Command::new(&args[0])
-        .args(&args[1..])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    if let Err(e) = super::detached_command(&args[0]).args(&args[1..]).spawn() {
         tracing::error!("Failed to run power command '{command}': {e}");
     }
 }
