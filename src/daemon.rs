@@ -57,12 +57,16 @@ pub fn scan_entries(cfg: &Config) -> Vec<Entry> {
     for (priority, name) in cfg.plugins.priority.iter().enumerate() {
         let start = out.len();
         match name.as_str() {
-            "apps" if cfg.plugins.apps => {
-                AppsPlugin::new(cfg.plugins.terminal.clone()).scan(&mut out)
-            }
-            "commands" if cfg.plugins.commands => {
-                CommandsPlugin::new(cfg.plugins.terminal.clone()).scan(&mut out)
-            }
+            "apps" if cfg.plugins.apps => AppsPlugin::new(
+                cfg.plugins.terminal.clone(),
+                cfg.plugins.terminal_args.clone(),
+            )
+            .scan(&mut out),
+            "commands" if cfg.plugins.commands => CommandsPlugin::new(
+                cfg.plugins.terminal.clone(),
+                cfg.plugins.terminal_args.clone(),
+            )
+            .scan(&mut out),
             "power" if cfg.plugins.power => {
                 PowerPlugin::new(cfg.plugins.power_commands.clone()).scan(&mut out)
             }

@@ -49,13 +49,21 @@ pub struct PluginsConfig {
     pub priority: Vec<String>,
     /// Terminal emulator to use for Terminal=true apps. None = auto-detect.
     pub terminal: Option<String>,
+    /// Arguments that make `terminal` run a command, before the command itself.
+    /// None = look the terminal up in the built-in table, which knows that
+    /// wezterm wants `start --` and gnome-terminal wants `--` rather than the
+    /// `-e` that foot/alacritty/kitty/xterm accept.
+    pub terminal_args: Option<Vec<String>>,
+    /// Command that puts text on the clipboard, used by the `=` and `:` modes.
+    /// The text is appended as the final argument.
+    pub clipboard: Vec<String>,
     /// Shell command run for each power plugin action. An empty string omits
     /// that action from results entirely, so individual actions (e.g. "lock"
     /// on a setup with no lock daemon) can be disabled without touching `power`.
     pub power_commands: PowerCommands,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PowerCommands {
     pub shutdown: String,
@@ -117,6 +125,8 @@ impl Default for PluginsConfig {
             power_confirm: true,
             priority: vec!["apps".into(), "commands".into(), "power".into()],
             terminal: None,
+            terminal_args: None,
+            clipboard: vec!["wl-copy".into()],
             power_commands: PowerCommands::default(),
         }
     }
@@ -337,6 +347,39 @@ mod tests {
         assert_eq!(cfg.window.max_results, before.window.max_results);
         assert_eq!(cfg.window.margin, before.window.margin);
         assert_eq!(cfg.window.item_height, before.window.item_height);
+    }
+
+    #[test]
+    fn the_shipped_example_config_parses_and_matches_the_defaults() {
+        // `make install` seeds config/config.toml, and README points at it as the
+        // reference for every option — so an option renamed in code while the
+        // example still advertises the old name is a real, user-visible break.
+        // This is the drift the review found (`monitor` documented but unread).
+        let raw =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config/config.toml"))
+                .expect("shipped example config is readable");
+
+        let cfg: Config = toml::from_str(&raw).expect("shipped example config parses");
+        let defaults = Config::default();
+
+        // The example is meant to document the defaults, so uncommented values
+        // should agree with them. Anchor differs deliberately (the example ships
+        // "top"), so assert that explicitly rather than silently allowing drift.
+        assert_eq!(cfg.window.anchor, "top");
+        assert_eq!(cfg.window.width, defaults.window.width);
+        assert_eq!(cfg.window.max_results, defaults.window.max_results);
+        assert_eq!(cfg.window.monitor, defaults.window.monitor);
+        assert_eq!(cfg.window.margin, defaults.window.margin);
+        assert_eq!(cfg.window.item_height, defaults.window.item_height);
+        assert_eq!(cfg.window.padding, defaults.window.padding);
+        assert_eq!(cfg.input.placeholder, defaults.input.placeholder);
+        assert_eq!(cfg.plugins.apps, defaults.plugins.apps);
+        assert_eq!(cfg.plugins.commands, defaults.plugins.commands);
+        assert_eq!(cfg.plugins.power, defaults.plugins.power);
+        assert_eq!(cfg.plugins.power_confirm, defaults.plugins.power_confirm);
+        assert_eq!(cfg.plugins.priority, defaults.plugins.priority);
+        assert_eq!(cfg.plugins.clipboard, defaults.plugins.clipboard);
+        assert_eq!(cfg.plugins.power_commands, defaults.plugins.power_commands);
     }
 
     #[test]

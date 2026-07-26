@@ -14,7 +14,11 @@ gotchas), see [CLAUDE.md](CLAUDE.md) once you're past this file.
 ## Prerequisites
 
 - A Wayland compositor with `wlr-layer-shell` support (Sway, Hyprland,
-  river, ... — **not** GNOME).
+  river, ... — **not** GNOME). slaunch checks for the protocol at startup
+  and exits with an explanation if it's missing, so X11 and GNOME fail
+  cleanly rather than crashing.
+- `wl-clipboard` (for `wl-copy`) if you want the `=` math and `:` emoji
+  modes to copy their result. Configurable via `[plugins] clipboard`.
 - Rust (stable) via [rustup](https://rustup.rs/).
 - GTK4 + `gtk4-layer-shell` dev libraries (e.g. on Arch: `gtk4
   gtk4-layer-shell`). If `cargo build` fails with a linker error mentioning
@@ -55,7 +59,7 @@ Type to search, `Enter` to launch, `Escape` to hide. Once that works, bind
 
 | Input | Result |
 |---|---|
-| `firefox` | Installed apps, fuzzy-matched |
+| `firefox` | Installed apps, fuzzy-matched (localised names, honouring `OnlyShowIn`/`TryExec`) |
 | `htop` | Anything on `$PATH` |
 | `=2 + 2 * 6` | Inline math, answer copied to clipboard |
 | `:fire` | Emoji search by name, copied to clipboard |

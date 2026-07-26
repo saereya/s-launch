@@ -47,19 +47,19 @@ impl Plugin for PowerPlugin {
     }
 }
 
+/// Run a configured power command through a shell.
+///
+/// The config documents these as shell commands and the useful values need to
+/// be: `pgrep swaylock || swaylock`, `loginctl lock-session || swaylock`, a
+/// pipeline, `$VAR`. They were previously split with shell-words and exec'd
+/// directly, so every one of those was passed through as a literal argument and
+/// silently did the wrong thing.
 fn spawn_command(command: &str) {
-    let args = match shell_words::split(command) {
-        Ok(args) if !args.is_empty() => args,
-        Ok(_) => {
-            tracing::error!("Empty power command");
-            return;
-        }
-        Err(e) => {
-            tracing::error!("Could not parse power command '{command}': {e}");
-            return;
-        }
-    };
-    if let Err(e) = super::detached_command(&args[0]).args(&args[1..]).spawn() {
+    if command.trim().is_empty() {
+        tracing::error!("Empty power command");
+        return;
+    }
+    if let Err(e) = super::detached_command("sh").args(["-c", command]).spawn() {
         tracing::error!("Failed to run power command '{command}': {e}");
     }
 }

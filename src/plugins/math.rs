@@ -1,6 +1,16 @@
 use super::{Entry, EntryKind, Plugin};
 
-pub struct MathPlugin;
+/// Holds the clipboard command so `=` results can be copied without hardwiring
+/// `wl-copy`; `query` doesn't use it.
+pub struct MathPlugin {
+    pub clipboard: Vec<String>,
+}
+
+impl MathPlugin {
+    pub fn new(clipboard: Vec<String>) -> Self {
+        Self { clipboard }
+    }
+}
 
 impl Plugin for MathPlugin {
     fn name(&self) -> &str {
@@ -28,9 +38,7 @@ impl Plugin for MathPlugin {
 
     fn launch(&self, entry: &Entry) {
         if let EntryKind::MathResult { value } = &entry.kind {
-            if let Err(e) = super::detached_command("wl-copy").arg(value).spawn() {
-                tracing::error!("Failed to copy math result to clipboard: {e}");
-            }
+            super::copy_to_clipboard(value, &self.clipboard);
         }
     }
 }
@@ -55,7 +63,7 @@ mod tests {
 
     fn query(input: &str) -> Vec<Entry> {
         let mut out = Vec::new();
-        MathPlugin.query(input, &mut out);
+        MathPlugin::new(vec!["wl-copy".into()]).query(input, &mut out);
         out
     }
 

@@ -30,7 +30,17 @@ fn index() -> &'static [IndexedEmoji] {
     })
 }
 
-pub struct EmojiPlugin;
+/// Holds the clipboard command so `:` results can be copied without hardwiring
+/// `wl-copy`; `query` doesn't use it.
+pub struct EmojiPlugin {
+    pub clipboard: Vec<String>,
+}
+
+impl EmojiPlugin {
+    pub fn new(clipboard: Vec<String>) -> Self {
+        Self { clipboard }
+    }
+}
 
 impl Plugin for EmojiPlugin {
     fn name(&self) -> &str {
@@ -72,9 +82,7 @@ impl Plugin for EmojiPlugin {
 
     fn launch(&self, entry: &Entry) {
         if let EntryKind::EmojiResult { emoji } = &entry.kind {
-            if let Err(e) = super::detached_command("wl-copy").arg(emoji).spawn() {
-                tracing::error!("Failed to copy emoji to clipboard: {e}");
-            }
+            super::copy_to_clipboard(emoji, &self.clipboard);
         }
     }
 }
@@ -85,7 +93,7 @@ mod tests {
 
     fn query(input: &str) -> Vec<Entry> {
         let mut out = Vec::new();
-        EmojiPlugin.query(input, &mut out);
+        EmojiPlugin::new(vec!["wl-copy".into()]).query(input, &mut out);
         out
     }
 

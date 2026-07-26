@@ -5,11 +5,15 @@ use super::{launch_in_terminal, Entry, EntryKind, Plugin};
 
 pub struct CommandsPlugin {
     pub terminal: Option<String>,
+    pub terminal_args: Option<Vec<String>>,
 }
 
 impl CommandsPlugin {
-    pub fn new(terminal: Option<String>) -> Self {
-        Self { terminal }
+    pub fn new(terminal: Option<String>, terminal_args: Option<Vec<String>>) -> Self {
+        Self {
+            terminal,
+            terminal_args,
+        }
     }
 }
 
@@ -65,7 +69,7 @@ impl Plugin for CommandsPlugin {
             // for the wrapping shell. to_string_lossy rather than to_str, which
             // used to silently launch "" for a non-UTF-8 path.
             let argv = vec![path.to_string_lossy().into_owned()];
-            launch_in_terminal(&argv, self.terminal.as_deref());
+            launch_in_terminal(&argv, self.terminal.as_deref(), self.terminal_args.as_ref());
         }
     }
 }
@@ -131,7 +135,7 @@ mod tests {
             unsafe { crate::test_env::EnvVarGuard::set("PATH", tmp.path().to_str().unwrap()) };
 
         let mut out = Vec::new();
-        CommandsPlugin::new(None).scan(&mut out);
+        CommandsPlugin::new(None, None).scan(&mut out);
         assert!(out.iter().any(|e| e.name == "realtool"));
         assert!(
             !out.iter().any(|e| e.name == "subdir"),
@@ -153,7 +157,7 @@ mod tests {
             unsafe { crate::test_env::EnvVarGuard::set("PATH", tmp.path().to_str().unwrap()) };
 
         let mut out = Vec::new();
-        CommandsPlugin::new(None).scan(&mut out);
+        CommandsPlugin::new(None, None).scan(&mut out);
         assert!(out.iter().any(|e| e.name == "realtool"));
         assert!(
             !out.iter().any(|e| e.name == "dirlink"),
@@ -184,7 +188,7 @@ mod tests {
         let _env = unsafe { crate::test_env::EnvVarGuard::set("PATH", &path_var) };
 
         let mut out = Vec::new();
-        CommandsPlugin::new(None).scan(&mut out);
+        CommandsPlugin::new(None, None).scan(&mut out);
 
         let mytool_entries: Vec<_> = out.iter().filter(|e| e.name == "mytool").collect();
         assert_eq!(mytool_entries.len(), 1, "mytool must appear only once");

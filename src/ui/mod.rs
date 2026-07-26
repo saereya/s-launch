@@ -77,16 +77,24 @@ fn confirm_row(entry: &AppEntry) -> AppEntry {
 }
 
 impl UiState {
+    fn math(&self) -> MathPlugin {
+        MathPlugin::new(self.config.plugins.clipboard.clone())
+    }
+
+    fn emoji(&self) -> EmojiPlugin {
+        EmojiPlugin::new(self.config.plugins.clipboard.clone())
+    }
+
     /// Recompute results for a query the user just changed. The result set is
     /// semantically new, so the selection resets to the top.
     fn refresh_results(&mut self) {
         if self.query.starts_with('=') {
             let mut math_out = Vec::new();
-            MathPlugin.query(&self.query, &mut math_out);
+            self.math().query(&self.query, &mut math_out);
             self.results = math_out;
         } else if self.query.starts_with(':') {
             let mut emoji_out = Vec::new();
-            EmojiPlugin.query(&self.query, &mut emoji_out);
+            self.emoji().query(&self.query, &mut emoji_out);
             emoji_out.truncate(self.config.window.max_results);
             self.results = emoji_out;
         } else {
@@ -186,15 +194,15 @@ impl UiState {
         }
 
         self.pending_confirm = None;
+        let terminal = self.config.plugins.terminal.clone();
+        let terminal_args = self.config.plugins.terminal_args.clone();
         match &entry.kind {
-            EntryKind::App { .. } => {
-                AppsPlugin::new(self.config.plugins.terminal.clone()).launch(&entry)
-            }
+            EntryKind::App { .. } => AppsPlugin::new(terminal, terminal_args).launch(&entry),
             EntryKind::Command { .. } => {
-                CommandsPlugin::new(self.config.plugins.terminal.clone()).launch(&entry)
+                CommandsPlugin::new(terminal, terminal_args).launch(&entry)
             }
-            EntryKind::MathResult { .. } => MathPlugin.launch(&entry),
-            EntryKind::EmojiResult { .. } => EmojiPlugin.launch(&entry),
+            EntryKind::MathResult { .. } => self.math().launch(&entry),
+            EntryKind::EmojiResult { .. } => self.emoji().launch(&entry),
             EntryKind::Power { .. } => {
                 PowerPlugin::new(self.config.plugins.power_commands.clone()).launch(&entry)
             }
@@ -219,11 +227,47 @@ struct Widgets {
     search_entry: Entry,
 }
 
+/// Look up a monitor by its connector name (`eDP-1`, `DP-3`, ...).
+fn monitor_by_name(name: &str) -> Option<gtk4::gdk::Monitor> {
+    let monitors = gtk4::gdk::Display::default()?.monitors();
+    (0..monitors.n_items())
+        .filter_map(|i| monitors.item(i))
+        .filter_map(|obj| obj.downcast::<gtk4::gdk::Monitor>().ok())
+        .find(|m| m.connector().as_deref() == Some(name))
+}
+
+fn first_monitor() -> Option<gtk4::gdk::Monitor> {
+    let monitors = gtk4::gdk::Display::default()?.monitors();
+    monitors
+        .item(0)
+        .and_then(|obj| obj.downcast::<gtk4::gdk::Monitor>().ok())
+}
+
 impl Widgets {
     fn apply_config(&self, config: &Config) {
         let w = &config.window;
 
         self.window.set_default_width(w.width as i32);
+
+        // `monitor` was parsed and advertised in the example config but never
+        // read, so all three documented modes silently did the same thing.
+        match w.monitor.as_str() {
+            // Leaving the monitor unset is what lets the compositor place the
+            // surface on the active output — and it's the only way to follow
+            // keyboard focus, since a layer-shell client can't ask which output
+            // has it.
+            "focused" => {}
+            "primary" => match first_monitor() {
+                Some(m) => self.window.set_monitor(&m),
+                None => tracing::warn!("No monitors reported; leaving output to the compositor"),
+            },
+            name => match monitor_by_name(name) {
+                Some(m) => self.window.set_monitor(&m),
+                None => {
+                    tracing::warn!("No output named '{name}'; leaving placement to the compositor")
+                }
+            },
+        }
 
         // Anchors are set explicitly in every branch: reload can move the window
         // between positions, so "center" has to actively clear the edges rather

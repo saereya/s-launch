@@ -7,7 +7,10 @@
 width = 640
 # Maximum result rows shown at once
 max_results = 12
-# Which output to appear on: "focused" | "primary" | exact output name
+# Which output to appear on:
+#   "focused" — let the compositor place it (follows the active output)
+#   "primary" — the first output the display reports
+#   an output name, e.g. "eDP-1" or "DP-3" (see `hyprctl monitors`, `swaymsg -t get_outputs`)
 monitor = "focused"
 # Where to anchor the window: "top" | "bottom" | "center"
 anchor = "top"
@@ -36,13 +39,25 @@ power_confirm = true
 # Remove or reorder entries to change which plugin's results show first.
 priority = ["apps", "commands", "power"]
 # Terminal emulator for launching Terminal=true .desktop entries.
-# If unset, slaunch auto-detects from a built-in fallback list.
+# If unset, slaunch auto-detects from a built-in list (foot, alacritty, kitty,
+# ghostty, wezterm, gnome-terminal, konsole, xterm).
 # terminal = "foot"
+# Arguments that make your terminal run a command. Leave unset for anything in
+# the list above — slaunch knows that wezterm wants ["start", "--"] and
+# gnome-terminal wants ["--"], rather than the "-e" the others accept. Only
+# needed for a terminal slaunch doesn't know.
+# terminal_args = ["-e"]
+
+# Command used to copy `=` math results and `:` emoji to the clipboard.
+# The text is appended as the last argument. Defaults to wl-clipboard's wl-copy;
+# on X11 use ["xclip", "-selection", "clipboard"].
+clipboard = ["wl-copy"]
 
 [plugins.power_commands]
-# Shell command run for each power plugin entry. Defaults target systemd/logind;
-# override per-action for other init systems, or set to "" to remove that entry
-# from results entirely (e.g. no lock daemon configured).
+# Shell command run for each power plugin entry — these go through `sh -c`, so
+# pipes, `&&`/`||` and $VARs all work (e.g. lock = "pgrep swaylock || swaylock").
+# Defaults target systemd/logind; override per-action for other init systems, or
+# set to "" to remove that entry from results entirely (e.g. no lock daemon).
 shutdown = "systemctl poweroff"
 reboot = "systemctl reboot"
 suspend = "systemctl suspend"
