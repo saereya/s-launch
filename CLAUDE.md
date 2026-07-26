@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `slaunch` is a Wayland application launcher (rofi/wofi-style) built as a persistent background daemon with a GTK4 + layer-shell popup UI. Single Rust binary (`src/main.rs`) that acts as both the daemon and its own IPC client depending on the subcommand.
 
+## Versioning
+
+Bump `version` in `Cargo.toml` (which also updates `Cargo.lock`) any time a change adds a new feature — a new plugin, subcommand, config option, or other user-facing capability. Pre-1.0, bump the minor number for a feature (`0.1.0` -> `0.2.0`) and the patch number for bug fixes/refactors with no new capability (`0.1.0` -> `0.1.1`). Do this as part of the same commit that introduces the feature.
+
 ## Commands
 
 ```sh
